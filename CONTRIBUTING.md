@@ -377,3 +377,25 @@ Pull requests that fix bugs are welcome alongside or instead of an issue.
 ## License
 
 By contributing you agree that your contributions will be licensed under the [Apache 2.0 License](LICENSE).
+
+### License headers
+
+Every source file (`.rs`, `.ts`, `.tsx`, `.sh`, `.sql`) must start with the Apache 2.0 header
+(after the shebang line for shell scripts). CI fails if it is missing. Use the comment
+syntax of the language (`//` for Rust/TypeScript, `#` for shell, `--` for SQL):
+
+```
+// Copyright 2024 VoteChain Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+```
