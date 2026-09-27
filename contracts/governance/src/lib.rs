@@ -26,6 +26,10 @@ mod test;
 pub mod test_helpers;
 #[cfg(test)]
 mod test_delegation;
+#[cfg(test)]
+mod integration_test;
+#[cfg(test)]
+mod security_regression_tests;
 
 use soroban_sdk::{contract, contractclient, contractimpl, token, Address, Env, String, Vec};
 use types::{ConfigKey, ContractError, ContractState, ProposalState, ProposalType, Proposal, Vote, VoteRecord};

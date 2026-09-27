@@ -1,4 +1,4 @@
-.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz help
+.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz mutants help
 
 STELLAR_CLI_VERSION := 22.8.2
 
@@ -18,6 +18,12 @@ fuzz:
 	@timeout 60 cargo +nightly fuzz run fuzz_cast_vote || true
 	@timeout 60 cargo +nightly fuzz run fuzz_finalise || true
 	@echo "Fuzz testing completed. Check for any panics or crashes above."
+
+## mutants: Run cargo-mutants on the governance and token contracts
+mutants:
+	@command -v cargo-mutants >/dev/null 2>&1 || (echo "Installing cargo-mutants..." && cargo install --locked cargo-mutants)
+	cargo mutants --package votechain-governance --file contracts/governance/src/lib.rs
+	cargo mutants --package votechain-token --file contracts/token/src/lib.rs
 
 ## fmt: Auto-format all source files
 fmt:
