@@ -10,7 +10,7 @@ This guide walks you through deploying the VoteChain governance and token contra
 |------|---------|---------|
 | Rust | 1.75+ | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | wasm32 target | — | `rustup target add wasm32-unknown-unknown` |
-| Stellar CLI | **22.8.2** (verified) | `cargo install --locked stellar-cli@22.8.2 --features opt` |
+| Stellar CLI | **22.8.2** | `cargo install --locked stellar-cli@22.8.2 --features opt` |
 
 Verify:
 
@@ -21,7 +21,7 @@ stellar --version
 
 ---
 
-## Quick Start (copy-paste, verified with Stellar CLI 22.8.2)
+## Quick Start (copy-paste, targets Stellar CLI 22.8.2)
 
 Set these once; every later command uses them:
 
