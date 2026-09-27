@@ -26,6 +26,8 @@ mod test;
 pub mod test_helpers;
 #[cfg(test)]
 mod test_delegation;
+#[cfg(test)]
+mod test_concurrency;
 
 use soroban_sdk::{contract, contractclient, contractimpl, token, Address, Env, String, Vec};
 use types::{ConfigKey, ContractError, ContractState, ProposalState, ProposalType, Proposal, Vote, VoteRecord};
