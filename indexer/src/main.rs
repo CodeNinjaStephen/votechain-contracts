@@ -23,7 +23,7 @@ struct Config {
 
 /// Required environment variables that must be set before the indexer starts.
 const REQUIRED_ENV_VARS: &[(&str, &str)] = &[
-    ("DATABASE_URL", "PostgreSQL connection string, e.g. postgres://user:pass@localhost/votechain"),
+    ("DATABASE_URL", "PostgreSQL connection string, e.g. postgres://user@localhost/votechain (supply the password via DATABASE_PASSWORD_FILE)"),
     ("CONTRACT_ID", "Deployed VoteChain governance contract address (C...)"),
 ];
 
@@ -57,14 +57,53 @@ fn validate_env() -> Result<()> {
     Ok(())
 }
 
+/// Validates the format of a PostgreSQL connection string and, if
+/// `password_file` is set, injects the password read from that file.
+///
+/// Error messages never include the URL itself, so credentials cannot leak
+/// into logs.
+fn resolve_database_url(raw: &str, password_file: Option<&str>) -> Result<String> {
+    let mut url = url::Url::parse(raw)
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL is not a valid URL (value redacted)"))?;
+    if !matches!(url.scheme(), "postgres" | "postgresql") {
+        anyhow::bail!("DATABASE_URL must use the postgres:// or postgresql:// scheme");
+    }
+    if url.host_str().map(str::is_empty).unwrap_or(true) {
+        anyhow::bail!("DATABASE_URL must include a host");
+    }
+    if let Some(path) = password_file.filter(|p| !p.is_empty()) {
+        if url.password().is_some() {
+            anyhow::bail!("DATABASE_URL must not embed a password when DATABASE_PASSWORD_FILE is set");
+        }
+        let password = std::fs::read_to_string(path)
+            .context("failed to read DATABASE_PASSWORD_FILE")?;
+        let password = password.trim_end_matches(['\n', '\r']);
+        if password.is_empty() {
+            anyhow::bail!("DATABASE_PASSWORD_FILE is empty");
+        }
+        url.set_password(Some(password))
+            .map_err(|_| anyhow::anyhow!("DATABASE_URL cannot carry a password"))?;
+    }
+    Ok(url.into())
+}
+
 impl Config {
     fn from_env() -> Result<Self> {
         // Validate all required vars first so the operator sees every missing
         // variable in a single error, not one at a time.
         validate_env()?;
 
+        let database_url = resolve_database_url(
+            &env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
+            env::var("DATABASE_PASSWORD_FILE").ok().as_deref(),
+        )?;
+        // Scrub credentials from the process environment so they are not
+        // exposed via /proc/self/environ to anything that inspects it later.
+        env::remove_var("DATABASE_URL");
+        env::remove_var("DATABASE_PASSWORD_FILE");
+
         Ok(Self {
-            database_url: env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
+            database_url,
             horizon_url: env::var("HORIZON_URL")
                 .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".into()),
             contract_id: env::var("CONTRACT_ID").context("CONTRACT_ID must be set")?,
@@ -348,4 +387,34 @@ async fn main() -> Result<()> {
     info!("VoteChain indexer API on {addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod database_url_tests {
+    use super::resolve_database_url;
+
+    #[test]
+    fn rejects_non_postgres_scheme() {
+        assert!(resolve_database_url("mysql://u@h/db", None).is_err());
+    }
+
+    #[test]
+    fn rejects_garbage_without_echoing_it() {
+        let err = resolve_database_url("not a url secret123", None).unwrap_err();
+        assert!(!err.to_string().contains("secret123"));
+    }
+
+    #[test]
+    fn injects_password_from_file() {
+        let path = std::env::temp_dir().join("votechain_db_pw_test");
+        std::fs::write(&path, "s3cret\n").unwrap();
+        let url = resolve_database_url("postgres://user@localhost/votechain", path.to_str()).unwrap();
+        assert_eq!(url, "postgres://user:s3cret@localhost/votechain");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn rejects_embedded_password_with_password_file() {
+        assert!(resolve_database_url("postgres://u:p@localhost/db", Some("/nonexistent")).is_err());
+    }
 }

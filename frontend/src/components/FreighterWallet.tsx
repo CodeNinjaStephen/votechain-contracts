@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-const STELLAR_NETWORK = "TESTNET";
+export const STELLAR_NETWORK: "TESTNET" | "MAINNET" =
+  (import.meta.env.VITE_STELLAR_NETWORK ?? "TESTNET").toUpperCase() === "MAINNET"
+    ? "MAINNET"
+    : "TESTNET";
 const FREIGHTER_DOWNLOAD = "https://www.freighter.app/";
 
 type FreighterApi = {
@@ -30,6 +33,7 @@ export function FreighterWallet() {
   });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [mismatchDismissed, setMismatchDismissed] = useState(false);
 
   // Check if already connected on mount
   useEffect(() => {
@@ -40,6 +44,7 @@ export function FreighterWallet() {
         freighter.getPublicKey().then((address: string) => {
           freighter.getNetwork().then((network: string) => {
             setWallet({ address, network, connected: true });
+            setMismatchDismissed(false);
           });
         });
       }
@@ -59,6 +64,8 @@ export function FreighterWallet() {
       const address: string = await freighter.getPublicKey();
       const network: string = await freighter.getNetwork();
       setWallet({ address, network, connected: true });
+      // Re-show the mismatch warning on every (re)connect
+      setMismatchDismissed(false);
     } catch (e: unknown) {
       setError((e as { message?: string })?.message ?? t("wallet.failed"));
     } finally {
@@ -71,10 +78,10 @@ export function FreighterWallet() {
     setError(null);
   }
 
+  const walletNetwork = wallet.network?.toUpperCase() ?? null;
   const networkMismatch =
-    wallet.connected &&
-    wallet.network &&
-    wallet.network.toUpperCase() !== STELLAR_NETWORK;
+    wallet.connected && walletNetwork !== null && walletNetwork !== STELLAR_NETWORK;
+  const showMismatch = networkMismatch && !mismatchDismissed;
 
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -93,9 +100,23 @@ export function FreighterWallet() {
         </>
       )}
 
-      {networkMismatch && (
-        <span role="alert" style={{ color: "orange" }}>
-          {t("wallet.networkMismatch", { network: wallet.network, expected: STELLAR_NETWORK })}
+      {showMismatch && (
+        <span
+          role="alert"
+          data-testid="network-mismatch"
+          style={{
+            color: STELLAR_NETWORK === "MAINNET" ? "red" : "orange",
+            fontWeight: STELLAR_NETWORK === "MAINNET" ? "bold" : undefined,
+          }}
+        >
+          {STELLAR_NETWORK === "MAINNET"
+            ? t("wallet.networkMismatchMainnet", { network: wallet.network })
+            : walletNetwork === "PUBLIC" || walletNetwork === "MAINNET"
+              ? t("wallet.networkMismatchTestnet", { network: wallet.network })
+              : t("wallet.networkMismatch", { network: wallet.network, expected: STELLAR_NETWORK })}{" "}
+          <button onClick={() => setMismatchDismissed(true)} aria-label={t("wallet.dismissWarning")}>
+            ×
+          </button>
         </span>
       )}
 
