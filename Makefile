@@ -1,4 +1,4 @@
-.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz help
+.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz verify help
 
 STELLAR_CLI_VERSION := 22.8.2
 
@@ -18,6 +18,26 @@ fuzz:
 	@timeout 60 cargo +nightly fuzz run fuzz_cast_vote || true
 	@timeout 60 cargo +nightly fuzz run fuzz_finalise || true
 	@echo "Fuzz testing completed. Check for any panics or crashes above."
+
+## verify: Run Kani formal-verification harnesses (requires cargo-kani)
+## Proves pass/reject condition correctness, overflow safety, and boundary cases.
+## Each harness is bounded to 60 seconds to fit inside CI time budgets.
+verify:
+	@command -v cargo-kani >/dev/null 2>&1 || (echo "Installing cargo-kani..." && cargo install --locked kani-verifier && cargo kani setup)
+	@echo "Running Kani harnesses for governance contract (60 s timeout each)..."
+	@timeout 60 cargo kani --harness verify_pass_condition_all_combinations \
+		--output-format terse \
+		-p votechain-governance || true
+	@timeout 60 cargo kani --harness verify_no_overflow_in_tally \
+		--output-format terse \
+		-p votechain-governance || true
+	@timeout 60 cargo kani --harness verify_boundary_total_equals_quorum \
+		--output-format terse \
+		-p votechain-governance || true
+	@timeout 60 cargo kani --harness verify_tie_always_rejects \
+		--output-format terse \
+		-p votechain-governance || true
+	@echo "Kani verification complete. Review any FAILED results above."
 
 ## fmt: Auto-format all source files
 fmt:

@@ -547,6 +547,56 @@ fn test_update_quorum_inactive_proposal_reverts() {
     t.client.update_quorum(&t.admin, &id, &500);
 }
 
+/// Issue #56 — update_quorum is bounded by the supply snapshot taken at
+/// proposal creation time, not the live supply at the time of the call.
+///
+/// Scenario: create a proposal against a supply of 10,000,000 tokens, then
+/// burn a large chunk of supply so the live supply drops below the proposed
+/// new quorum.  update_quorum must still succeed because the snapshot was
+/// taken before the burn and remains the upper bound.
+#[test]
+fn test_update_quorum_uses_supply_snapshot_not_live_supply() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+
+    // Initial supply = 10_000_000 (set up by setup_env / token initialize).
+    // create a proposal with quorum = 1_000 (well within supply).
+    let id = create_test_proposal(&t, &proposer);
+
+    // Verify snapshot was captured at creation.
+    let proposal_before = t.client.get_proposal(&id);
+    assert!(
+        proposal_before.supply_snapshot > 0,
+        "supply_snapshot must be positive after creation"
+    );
+
+    // Burn most of the supply so live supply is now much smaller.
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    // Burn 9_900_000 tokens from admin (leaves 100_000 live).
+    tok.burn(&t.admin, &t.admin, &9_900_000_i128);
+
+    // update_quorum to 5_000_000 — this exceeds the current live supply
+    // (100_000) but is within the snapshot (10_000_000).
+    // The call must SUCCEED because the snapshot anchors validation.
+    t.client.update_quorum(&t.admin, &id, &5_000_000);
+    let proposal_after = t.client.get_proposal(&id);
+    assert_eq!(proposal_after.quorum, 5_000_000, "quorum should be updated to 5_000_000");
+}
+
+/// Issue #56 — update_quorum must REJECT a new quorum that exceeds the
+/// supply_snapshot, regardless of whether live supply has changed.
+#[test]
+#[should_panic(expected = "Error(Contract, #22)")]
+fn test_update_quorum_exceeding_snapshot_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+
+    // Attempt to set quorum above the snapshot (10_000_000 + 1).
+    // This must revert with QuorumExceedsSupply (error #22).
+    t.client.update_quorum(&t.admin, &id, &10_000_001);
+}
+
 // ── end SC-027 ────────────────────────────────────────────────────────────────
 
 // ── storage persistence tests ─────────────────────────────────────────────────

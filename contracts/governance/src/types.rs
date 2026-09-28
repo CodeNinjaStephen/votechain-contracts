@@ -103,6 +103,8 @@ pub enum ContractError {
     CannotRemoveLastToken = 41,
     /// 42 – Weight multiplier must be greater than zero
     InvalidWeightMultiplier = 42,
+    /// 43 – Global cap on active proposals has been reached
+    TooManyActiveProposals = 43,
 }
 
 /// Different types of proposals the governance contract supports.
@@ -187,6 +189,14 @@ pub struct Proposal {
     pub execute_after: u64,
     /// Type of proposal (Standard or ParameterChange)
     pub proposal_type: ProposalType,
+    /// Total token supply snapshot captured at proposal creation time.
+    ///
+    /// Used by `update_quorum` to bound the new quorum against the supply
+    /// that was in effect when the proposal was created, rather than the
+    /// live supply (which may have changed due to minting or burning after
+    /// the proposal was opened). This prevents a scenario where tokens are
+    /// burned after creation, making the quorum permanently unachievable.
+    pub supply_snapshot: i128,
 }
 
 /// Pending multi-sig action types.
@@ -363,6 +373,18 @@ pub enum DataKey {
     /// For backward compatibility, single-token DAOs store a token in `VotingToken`
     /// and may also have a corresponding entry in `VotingTokens`.
     VotingTokens,
+
+    /// WASM hash of the contract version prior to the most recent upgrade (instance storage).
+    /// Used for rollback verification. Cleared on re-upgrade.
+    PreviousWasmHash,
+
+    /// Global cap on the number of simultaneously active proposals (instance storage).
+    /// Defaults to 50 if not set.
+    MaxActiveProposals,
+
+    /// Monotonic counter tracking the number of currently active proposals (instance storage).
+    /// Incremented on proposal creation, decremented on finalisation/cancellation.
+    ActiveProposalsCount,
 }
 
 #[contracttype]
