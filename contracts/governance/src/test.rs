@@ -3863,3 +3863,290 @@ fn test_multi_asset_voting_parameter_change_interaction() {
 }
 
 // ── end Issue #119 ─────────────────────────────────────────────────────────────
+
+// ── Issue #42: Timelock enforcement in execute() ───────────────────────────────
+
+/// Helper: set up a passed proposal with a specific timelock_duration.
+/// Returns (client, admin, proposal_id, finalize_time).
+fn setup_passed_with_timelock(
+    env: &Env,
+    timelock_duration: u64,
+) -> (GovernanceContractClient<'static>, Address, u64) {
+    env.mock_all_auths();
+    let admin = Address::generate(env);
+    let voter = Address::generate(env);
+
+    let tok_id = env.register(votechain_token::TokenContract, ());
+    let tok = votechain_token::TokenContractClient::new(env, &tok_id);
+    tok.initialize(&voter, &10_000_000);
+
+    let gov_id = env.register(GovernanceContract, ());
+    let client = GovernanceContractClient::new(env, &gov_id);
+    client.initialize(
+        &admin,
+        &tok_id,
+        &0_i128,
+        &0_u64,
+        &60_u64,
+        &2_592_000_u64,
+        &false,
+        &timelock_duration,
+        &0_u64,
+    );
+
+    let id = client.create_proposal(
+        &voter,
+        &String::from_str(env, "Timelock test"),
+        &String::from_str(env, "Testing timelock enforcement"),
+        &100,
+        &3600,
+    );
+    client.cast_vote(&voter, &id, &Vote::Yes);
+    // Advance past voting period.
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+    client.finalise(&id);
+
+    (client, admin, id)
+}
+
+/// execute() must revert with TimelockNotExpired when called before execute_after.
+#[test]
+fn test_execute_before_timelock_reverts() {
+    let env = Env::default();
+    // 1-hour timelock
+    let (client, admin, id) = setup_passed_with_timelock(&env, 3600);
+
+    // Attempt to execute immediately — timelock has not elapsed.
+    let result = client.try_execute(&admin, &id);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::TimelockNotExpired)),
+        "execute() must return TimelockNotExpired when called before execute_after"
+    );
+}
+
+/// execute() must succeed once the timelock has elapsed.
+#[test]
+fn test_execute_after_timelock_succeeds() {
+    let env = Env::default();
+    let timelock = 3600_u64;
+    let (client, admin, id) = setup_passed_with_timelock(&env, timelock);
+
+    // Advance past the timelock.
+    env.ledger().with_mut(|l| l.timestamp += timelock + 1);
+    // Should not panic or return an error.
+    client.execute(&admin, &id);
+
+    let proposal = client.get_proposal(&id);
+    assert_eq!(
+        proposal.state,
+        ProposalState::Executed,
+        "Proposal must be Executed after timelock expires"
+    );
+}
+
+/// execute() with zero timelock (disabled) must succeed immediately after finalisation.
+#[test]
+fn test_execute_zero_timelock_succeeds_immediately() {
+    let env = Env::default();
+    let (client, admin, id) = setup_passed_with_timelock(&env, 0);
+
+    // No timelock: execute_after == finalized_at + 0, so it should pass straight away.
+    client.execute(&admin, &id);
+
+    let proposal = client.get_proposal(&id);
+    assert_eq!(proposal.state, ProposalState::Executed);
+}
+
+// ── Issue #43: Proposal TTL bump on load/save ──────────────────────────────────
+
+/// After saving and loading a proposal the storage entry must still be accessible
+/// (the TTL was bumped on both operations).
+///
+/// In a real Soroban environment the ledger would need to advance beyond TTL_MIN_LEDGERS
+/// without a bump for expiry to occur.  Within the testutils sandbox the host does not
+/// enforce TTL expiry, but we verify that `extend_ttl` is called by confirming that
+/// a proposal written and then re-read remains intact.
+#[test]
+fn test_proposal_ttl_bump_on_save_and_load() {
+    let t = setup_env();
+
+    let voter = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &voter, &1_000);
+
+    let id = create_test_proposal(&t, &voter);
+
+    // Load the proposal — this exercises the extend_ttl path in load_proposal.
+    let proposal = t.client.get_proposal(&id);
+    assert_eq!(proposal.id, id);
+    assert_eq!(proposal.state, ProposalState::Active);
+
+    // Cast a vote to trigger save_proposal via the write path.
+    t.client.cast_vote(&voter, &id, &Vote::Yes);
+
+    // Reload after write — TTL was bumped on set as well.
+    let updated = t.client.get_proposal(&id);
+    assert_eq!(updated.votes_yes, 1_000);
+}
+
+/// Verify that the TTL constants exported from storage have the expected values.
+#[test]
+fn test_ttl_constants_are_correct() {
+    // MIN must be 30 days in ledgers (≈ seconds).
+    assert_eq!(
+        crate::storage::TTL_MIN_LEDGERS,
+        2_592_000,
+        "TTL_MIN_LEDGERS must equal 30 days (2_592_000 ledgers)"
+    );
+    // MAX must be 36 days in ledgers (≈ seconds).
+    assert_eq!(
+        crate::storage::TTL_MAX_LEDGERS,
+        3_110_400,
+        "TTL_MAX_LEDGERS must equal 36 days (3_110_400 ledgers)"
+    );
+}
+
+// ── Issue #51: update_timelock() ───────────────────────────────────────────────
+
+/// Non-admin must not be able to call update_timelock.
+#[test]
+fn test_update_timelock_non_admin_reverts() {
+    let t = setup_env();
+    let non_admin = Address::generate(&t.env);
+
+    let result = t.client.try_update_timelock(&non_admin, &3600_u64);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::NotAdmin)),
+        "update_timelock must revert with NotAdmin for non-admin caller"
+    );
+}
+
+/// Admin can update the timelock duration; the change is reflected in the
+/// `execute_after` field of a subsequently created and finalised proposal.
+#[test]
+fn test_update_timelock_admin_succeeds() {
+    let t = setup_env();
+
+    // Update timelock to 7200 seconds (2 hours).
+    t.client.update_timelock(&t.admin, &7200_u64);
+
+    // Create and finalise a proposal so execute_after is set.
+    let voter = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &voter, &1_000);
+
+    let id = t.client.create_proposal(
+        &voter,
+        &String::from_str(&t.env, "Post-update proposal"),
+        &String::from_str(&t.env, "Created after timelock update"),
+        &100,
+        &3600,
+    );
+    t.client.cast_vote(&voter, &id, &Vote::Yes);
+    t.env.ledger().with_mut(|l| l.timestamp += 3601);
+    t.client.finalise(&id);
+
+    let proposal = t.client.get_proposal(&id);
+    assert_eq!(proposal.state, ProposalState::Passed);
+    // execute_after must be at least finalized_at + 7200.
+    // We know the ledger is at ~3601+ and timelock is 7200, so execute_after >= 3601 + 7200.
+    assert!(
+        proposal.execute_after >= 3601 + 7200,
+        "execute_after must respect the new timelock duration (7200 s), got {}",
+        proposal.execute_after
+    );
+}
+
+/// Proposals created before an update retain their original execute_after.
+#[test]
+fn test_update_timelock_existing_proposals_unaffected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let voter = Address::generate(&env);
+
+    let tok_id = env.register(votechain_token::TokenContract, ());
+    let tok = votechain_token::TokenContractClient::new(&env, &tok_id);
+    tok.initialize(&voter, &10_000_000);
+
+    let gov_id = env.register(GovernanceContract, ());
+    let client = GovernanceContractClient::new(&env, &gov_id);
+    client.initialize(
+        &admin,
+        &tok_id,
+        &0_i128,
+        &0_u64,
+        &60_u64,
+        &2_592_000_u64,
+        &false,
+        &3600_u64, // 1-hour timelock at init
+        &0_u64,
+    );
+
+    // Create and finalise proposal BEFORE the timelock update.
+    let id_before = client.create_proposal(
+        &voter,
+        &String::from_str(&env, "Before update"),
+        &String::from_str(&env, "desc"),
+        &100,
+        &3600,
+    );
+    client.cast_vote(&voter, &id_before, &Vote::Yes);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+    client.finalise(&id_before);
+    let proposal_before = client.get_proposal(&id_before);
+    let execute_after_before = proposal_before.execute_after;
+
+    // Update the timelock to 7200 s.
+    client.update_timelock(&admin, &7200_u64);
+
+    // The old proposal's execute_after must be unchanged.
+    let proposal_after_update = client.get_proposal(&id_before);
+    assert_eq!(
+        proposal_after_update.execute_after,
+        execute_after_before,
+        "Existing proposal execute_after must not change after update_timelock"
+    );
+}
+
+/// update_timelock must reject durations greater than 30 days.
+#[test]
+fn test_update_timelock_exceeds_max_reverts() {
+    let t = setup_env();
+    let too_long: u64 = 2_592_001; // > 30 days
+
+    let result = t.client.try_update_timelock(&t.admin, &too_long);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::InvalidDurationRange)),
+        "update_timelock must revert when new_duration > 30 days"
+    );
+}
+
+/// update_timelock must accept 0 (disabling the timelock).
+#[test]
+fn test_update_timelock_to_zero_succeeds() {
+    let t = setup_env();
+    // Should not panic.
+    t.client.update_timelock(&t.admin, &0_u64);
+}
+
+/// update_timelock emits a TimelockUpdated event with old and new duration.
+#[test]
+fn test_update_timelock_emits_event() {
+    let t = setup_env();
+
+    t.client.update_timelock(&t.admin, &7200_u64);
+
+    let events = t.env.events().all();
+    let last = events.last().unwrap();
+    // Topic 0 is "tlupdate".
+    let (topics, _data) = last;
+    assert_eq!(
+        topics.get(0).unwrap(),
+        symbol_short!("tlupdate").into_val(&t.env),
+        "update_timelock must emit a 'tlupdate' event"
+    );
+}

@@ -15,7 +15,7 @@
 #![no_std]
 
 mod events;
-mod storage;
+pub(crate) mod storage;
 mod types;
 
 #[cfg(test)]
@@ -734,6 +734,46 @@ impl GovernanceContract {
     /// Returns the current global cap on active proposals.
     pub fn get_max_active_proposals(env: Env) -> u64 {
         storage::get_max_active_proposals(&env)
+    }
+
+    /// Updates the mandatory timelock delay between a proposal passing and its execution.
+    ///
+    /// The new duration applies **only to proposals created after this call**.  Proposals that
+    /// have already passed retain the `execute_after` timestamp computed at finalisation time.
+    ///
+    /// # Parameters
+    /// - `new_duration`: new timelock in seconds.  Must be in the range `[0, 2_592_000]`
+    ///   (0 = no delay; 2_592_000 = 30 days).
+    ///
+    /// # Errors
+    /// - [`ContractError::InvalidAddress`] if `admin` is the zero address.
+    /// - [`ContractError::NotAdmin`] if `admin` does not match the stored admin.
+    /// - [`ContractError::ContractPaused`] if the contract is paused.
+    /// - [`ContractError::InvalidDurationRange`] if `new_duration` exceeds 30 days.
+    pub fn update_timelock(
+        env: Env,
+        admin: Address,
+        new_duration: u64,
+    ) -> Result<(), ContractError> {
+        // SEC-005: auth first.
+        admin.require_auth();
+        // SEC-004: reject zero address.
+        require_non_zero_address(&env, &admin)?;
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        if get_admin(&env)? != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        // 30 days is the maximum timelock duration (matches max voting duration).
+        const MAX_TIMELOCK: u64 = 2_592_000;
+        if new_duration > MAX_TIMELOCK {
+            return Err(ContractError::InvalidDurationRange);
+        }
+        let old_duration = get_timelock_duration(&env);
+        set_timelock_duration(&env, new_duration);
+        events::timelock_updated(&env, &admin, old_duration, new_duration);
+        Ok(())
     }
 
     /// Transfers admin rights to a new address. Only the current admin may call this.

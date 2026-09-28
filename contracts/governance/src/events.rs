@@ -167,3 +167,17 @@ pub fn admin_parameter_override(env: &Env, admin: &Address, config_key: &ConfigK
         (admin.clone(), config_key.clone(), new_value),
     );
 }
+
+/// Emits a `tlupdate` event when the admin updates the timelock duration.
+///
+/// Topics: `("tlupdate",)`
+/// Data: `(admin: Address, old_duration: u64, new_duration: u64)`
+///
+/// Only applies to proposals created after the update — existing proposals retain the
+/// `execute_after` timestamp that was computed when they were finalised.
+pub fn timelock_updated(env: &Env, admin: &Address, old_duration: u64, new_duration: u64) {
+    env.events().publish(
+        (symbol_short!("tlupdate"),),
+        (admin.clone(), old_duration, new_duration),
+    );
+}
