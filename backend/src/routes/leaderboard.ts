@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getLeaderboard, getVoterStats } from '../services/leaderboardService';
-import { redisClient } from '../middleware/redisCache';
+import { getRedis } from '../middleware/redisCache';
 
 const router = Router();
 
@@ -24,7 +24,7 @@ const router = Router();
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const leaderboard = await getLeaderboard(redisClient);
+    const leaderboard = await getLeaderboard(getRedis());
 
     // Add rank to each entry
     const ranked = leaderboard.map((entry, index) => ({
@@ -62,7 +62,7 @@ router.get('/address/:address', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid address' });
     }
 
-    const stats = await getVoterStats(redisClient, address);
+    const stats = await getVoterStats(getRedis(), address);
 
     return res.json(stats);
   } catch (error) {

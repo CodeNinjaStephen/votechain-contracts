@@ -1,4 +1,9 @@
-import { RedisClient } from '../middleware/redisCache';
+import type { RedisClientType } from "redis";
+
+// The leaderboard service accepts a nullable Redis client. When Redis is
+// unavailable (circuit-breaker open) callers pass null and functions degrade
+// gracefully by returning empty/default data.
+type MaybeRedis = RedisClientType | null | undefined;
 
 export interface LeaderboardEntry {
   address: string;
@@ -12,24 +17,25 @@ const LEADERBOARD_CACHE_KEY = 'leaderboard:top50';
 const CACHE_TTL_SECONDS = 300; // 5 minutes
 
 /**
- * Computes the top 50 voters by proposal participation count
- * Results are cached for 5 minutes
+ * Computes the top 50 voters by proposal participation count.
+ * Results are cached for 5 minutes. Returns an empty list when Redis
+ * is unavailable.
  */
 export async function getLeaderboard(
-  redisClient: RedisClient
+  redisClient: MaybeRedis
 ): Promise<LeaderboardEntry[]> {
+  if (!redisClient?.isOpen) return [];
+
   // Try to get from cache first
   const cached = await redisClient.get(LEADERBOARD_CACHE_KEY);
   if (cached) {
-    return JSON.parse(cached);
+    return JSON.parse(cached) as LeaderboardEntry[];
   }
 
-  // In production, this would query the indexer or database
-  // For now, returning a stub that demonstrates the structure
+  // In production, this would query the indexer or database.
   const leaderboard: LeaderboardEntry[] = [];
 
-  // Cache the result
-  await redisClient.setex(
+  await redisClient.setEx(
     LEADERBOARD_CACHE_KEY,
     CACHE_TTL_SECONDS,
     JSON.stringify(leaderboard)
@@ -39,44 +45,39 @@ export async function getLeaderboard(
 }
 
 /**
- * Invalidates the leaderboard cache when vote data changes
+ * Invalidates the leaderboard cache when vote data changes.
  */
 export async function invalidateLeaderboardCache(
-  redisClient: RedisClient
+  redisClient: MaybeRedis
 ): Promise<void> {
+  if (!redisClient?.isOpen) return;
   await redisClient.del(LEADERBOARD_CACHE_KEY);
 }
 
 /**
- * Updates a voter's participation stats
- * This would be called by the indexer when processing votes
+ * Updates a voter's participation stats.
+ * Called by the indexer when processing on-chain votes.
  */
 export async function recordVote(
-  redisClient: RedisClient,
+  redisClient: MaybeRedis,
   address: string,
   weight: number,
   proposalId: string
 ): Promise<void> {
+  if (!redisClient?.isOpen) return;
+
   const key = `voter:${address}`;
-
-  // Track votes cast
-  await redisClient.hincrby(key, 'votes_cast', 1);
-
-  // Track total weight
-  await redisClient.hincrbyfloat(key, 'total_weight_cast', weight);
-
-  // Track proposal participation (set to avoid duplicates)
-  await redisClient.sadd(`voter:${address}:proposals`, proposalId);
-
-  // Invalidate leaderboard cache since data changed
+  await redisClient.hIncrBy(key, 'votes_cast', 1);
+  await redisClient.hIncrByFloat(key, 'total_weight_cast', weight);
+  await redisClient.sAdd(`voter:${address}:proposals`, proposalId);
   await invalidateLeaderboardCache(redisClient);
 }
 
 /**
- * Retrieves vote history for a specific address
+ * Retrieves vote history for a specific address.
  */
 export async function getVoterStats(
-  redisClient: RedisClient,
+  redisClient: MaybeRedis,
   address: string
 ): Promise<{
   address: string;
@@ -84,16 +85,18 @@ export async function getVoterStats(
   proposals_participated: number;
   total_weight_cast: number;
 }> {
+  if (!redisClient?.isOpen) {
+    return { address, votes_cast: 0, proposals_participated: 0, total_weight_cast: 0 };
+  }
+
   const key = `voter:${address}`;
-  const stats = await redisClient.hgetall(key);
-  const proposalCount = await redisClient.scard(
-    `voter:${address}:proposals`
-  );
+  const stats = await redisClient.hGetAll(key);
+  const proposalCount = await redisClient.sCard(`voter:${address}:proposals`);
 
   return {
     address,
-    votes_cast: parseInt(stats.votes_cast || '0', 10),
+    votes_cast: parseInt(stats['votes_cast'] ?? '0', 10),
     proposals_participated: proposalCount,
-    total_weight_cast: parseFloat(stats.total_weight_cast || '0'),
+    total_weight_cast: parseFloat(stats['total_weight_cast'] ?? '0'),
   };
 }

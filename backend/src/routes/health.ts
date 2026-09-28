@@ -10,7 +10,7 @@
  */
 
 import { Router, Request, Response } from "express";
-import { isRedisReady } from "../middleware/redisCache";
+import { isRedisReady, getCacheMetrics } from "../middleware/redisCache";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { version } = require("../../package.json") as { version?: string };
@@ -49,6 +49,16 @@ router.get("/ready", (_req: Request, res: Response) => {
     status: "unavailable",
     checks: { redis: false },
   });
+});
+
+/**
+ * GET /metrics/cache
+ *
+ * Exposes Redis cache hit/miss counters and current Redis connectivity. (#38)
+ * The redis_up field is false when Redis is unreachable and caching is degraded.
+ */
+router.get("/metrics/cache", (_req: Request, res: Response) => {
+  res.status(200).json(getCacheMetrics());
 });
 
 export default router;
