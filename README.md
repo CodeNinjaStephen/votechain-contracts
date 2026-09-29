@@ -1257,6 +1257,28 @@ This starts two services:
 - `dev` — Rust + wasm32 + Stellar CLI, with the repo mounted at `/app`
 - `stellar-node` — local Stellar node with Soroban RPC on `http://localhost:8000`
 
+### Health Check Status
+
+All services expose Docker healthchecks. Use `--wait` to block until every service passes:
+
+```bash
+# Start services and wait until all are healthy
+docker compose up --wait
+```
+
+Check the current health status of each service:
+
+```bash
+docker compose ps
+```
+
+The `dev` service depends on `stellar-node` being healthy before it starts, preventing race conditions during container startup.
+
+Service readiness endpoints:
+- `stellar-node` — `http://localhost:8000/` (Soroban RPC)
+- `backend` — `http://localhost:3001/health`
+- `redis` — `redis-cli ping`
+
 ### Run Commands in Container
 
 ```bash

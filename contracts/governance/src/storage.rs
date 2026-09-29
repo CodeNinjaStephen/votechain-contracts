@@ -400,3 +400,49 @@ pub fn set_previous_wasm_hash(env: &Env, hash: &soroban_sdk::BytesN<32>) {
 pub fn get_previous_wasm_hash(env: &Env) -> Option<soroban_sdk::BytesN<32>> {
     env.storage().instance().get(&DataKey::PreviousWasmHash)
 }
+
+// ---------------------------------------------------------------------------
+// Active proposal cap and counter (#34 — TooManyActiveProposals)
+// ---------------------------------------------------------------------------
+
+const DEFAULT_MAX_ACTIVE_PROPOSALS: u64 = 50;
+
+/// Stores the global cap on simultaneously active proposals.
+pub fn set_max_active_proposals(env: &Env, cap: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MaxActiveProposals, &cap);
+}
+
+/// Returns the global cap on simultaneously active proposals.
+/// Defaults to 50 if not explicitly configured.
+pub fn get_max_active_proposals(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxActiveProposals)
+        .unwrap_or(DEFAULT_MAX_ACTIVE_PROPOSALS)
+}
+
+/// Returns the current count of active proposals.
+pub fn count_active_proposals(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ActiveProposalsCount)
+        .unwrap_or(0)
+}
+
+/// Increments the active-proposal counter by one.
+pub fn increment_active_proposals(env: &Env) {
+    let current = count_active_proposals(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::ActiveProposalsCount, &(current + 1));
+}
+
+/// Decrements the active-proposal counter by one (saturating at zero).
+pub fn decrement_active_proposals(env: &Env) {
+    let current = count_active_proposals(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::ActiveProposalsCount, &current.saturating_sub(1));
+}
