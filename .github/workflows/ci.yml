@@ -20,16 +20,16 @@ jobs:
         run: |
           missing=()
           while IFS= read -r -d '' file; do
-            if ! head -3 "$file" | grep -q "Apache License\|Apache-2.0\|Licensed under the Apache"; then
+            if ! head -5 "$file" | grep -q "Apache License\|Apache-2.0\|Licensed under the Apache"; then
               missing+=("$file")
             fi
-          done < <(find contracts -name "*.rs" -print0)
+          done < <(find contracts -name "*.rs" -print0; git ls-files -z '*.ts' '*.tsx' '*.sh')
           if [ ${#missing[@]} -gt 0 ]; then
             echo "ERROR: Missing Apache 2.0 license header in:"
             printf '  %s\n' "${missing[@]}"
             exit 1
           fi
-          echo "All .rs files have the license header."
+          echo "All .rs, .ts, .tsx and .sh files have the license header."
 
   secret-scan:
     name: Secret Scanning (gitleaks)
