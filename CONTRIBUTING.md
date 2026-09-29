@@ -416,3 +416,35 @@ Pull requests that fix bugs are welcome alongside or instead of an issue.
 ## License
 
 By contributing you agree that your contributions will be licensed under the [Apache 2.0 License](LICENSE).
+
+---
+
+## Updating test snapshots
+
+Snapshot tests in `contracts/*/test_snapshots/test/` record the full Soroban
+ledger state (events, auth, storage) after each test run.  CI fails if the
+committed snapshots differ from what the current code produces.
+
+### When to update snapshots
+
+Update snapshots whenever you intentionally change an event structure, add a
+new event field, or rename a symbol. **Never** update snapshots to silence an
+unexpected failure — investigate the root cause first.
+
+### How to update
+
+```bash
+# Regenerate all snapshots
+SOROBAN_TEST_SNAPSHOT_UPDATE=1 cargo test
+
+# Or regenerate snapshots for a single contract
+SOROBAN_TEST_SNAPSHOT_UPDATE=1 cargo test -p votechain_governance
+SOROBAN_TEST_SNAPSHOT_UPDATE=1 cargo test -p votechain_token
+
+# Review every changed snapshot file before committing
+git diff contracts/*/test_snapshots/
+```
+
+Commit the updated JSON files together with your code change so reviewers can
+see exactly what the event shape change looks like.
+

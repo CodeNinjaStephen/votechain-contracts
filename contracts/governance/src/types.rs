@@ -373,3 +373,32 @@ pub struct VoteRecord {
     pub vote_type: Vote,
     pub weight: i128,
 }
+
+/// Snapshot of all governance contract configuration values.
+///
+/// Returned by [`GovernanceContract::get_config`]. Bundles every config field
+/// so off-chain tooling can fetch everything with a single RPC call.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ContractConfig {
+    /// Current admin address.
+    pub admin: Address,
+    /// Address of the governance token contract.
+    pub voting_token: Address,
+    /// Minimum token balance required to create a proposal (0 = no minimum).
+    pub min_proposal_balance: i128,
+    /// Seconds a proposer must wait between consecutive proposals (0 = no cooldown).
+    pub proposal_cooldown: u64,
+    /// Whether the admin is restricted from voting on proposals they created.
+    pub restrict_admin_vote: bool,
+    /// Whether the contract is currently paused.
+    pub paused: bool,
+    /// Mandatory delay (seconds) between a proposal passing and execution (0 = no delay).
+    pub timelock_duration: u64,
+    /// Minimum allowed voting duration in seconds.
+    pub min_duration: u64,
+    /// Maximum allowed voting duration in seconds.
+    pub max_duration: u64,
+    /// Contract semantic version as `(major, minor, patch)`.
+    pub version: (u32, u32, u32),
+}
