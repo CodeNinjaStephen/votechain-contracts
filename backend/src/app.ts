@@ -19,6 +19,7 @@ import { connectRedis } from "./middleware/redisCache";
 import { requestTracing } from "./middleware/requestTracing";
 import healthRoutes from "./routes/health";
 import proposalRoutes from "./routes/proposals";
+import simulateRoutes from "./routes/simulate";
 import {
   notFoundHandler,
   globalErrorHandler,
@@ -109,6 +110,8 @@ app.use(express.json());
 app.use("/", healthRoutes);
 
 app.use("/api", proposalRoutes);
+// Issue #111 — stateless simulation endpoint (no auth required)
+app.use("/api", simulateRoutes);
 
 // Catch unmatched routes — must come after all real route registrations.
 app.use(notFoundHandler);
