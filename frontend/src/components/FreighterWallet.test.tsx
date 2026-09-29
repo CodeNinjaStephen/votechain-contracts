@@ -103,6 +103,24 @@ describe('FreighterWallet', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/network mismatch/i);
   });
 
+  it('lets the user dismiss the mismatch warning and shows it again on reconnect', async () => {
+    const user = userEvent.setup();
+    installMockFreighter({
+      getNetwork: vi.fn().mockResolvedValue('PUBLIC'),
+    });
+    render(<FreighterWallet />);
+
+    await user.click(screen.getByRole('button', { name: /connect (freighter )?wallet/i }));
+    await waitFor(() => expect(screen.getByTestId('network-mismatch')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /dismiss network warning/i }));
+    expect(screen.queryByTestId('network-mismatch')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /disconnect wallet/i }));
+    await user.click(screen.getByRole('button', { name: /connect (freighter )?wallet/i }));
+    await waitFor(() => expect(screen.getByTestId('network-mismatch')).toBeInTheDocument());
+  });
+
   it('shows error and install link when Freighter extension is missing', async () => {
     const user = userEvent.setup();
     removeMockFreighter(); // no freighter on window

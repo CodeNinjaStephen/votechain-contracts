@@ -163,3 +163,17 @@ describe('ProposalList', () => {
     expect(screen.getByText('Gamma Proposal')).toBeInTheDocument();
   });
 });
+
+// ── Security (issue #96) ──────────────────────────────────────
+
+describe('ProposalList XSS safety', () => {
+  it('renders a malicious title as escaped text, not executable HTML', () => {
+    const payload = '<script>alert(1)</script>';
+    const { container } = renderList([
+      makeProposal({ title: payload, description: '<img src=x onerror=alert(1)>' }),
+    ]);
+    expect(screen.getAllByText(payload, { exact: false }).length).toBeGreaterThan(0);
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('img[onerror]')).toBeNull();
+  });
+});
