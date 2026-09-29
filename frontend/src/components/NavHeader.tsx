@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import React, { useState, useRef, useEffect } from 'react';
+import { NavLink } from 'react-router-dom';
 
 interface NavHeaderProps {
   walletSlot?: React.ReactNode;
@@ -61,9 +62,9 @@ export function NavHeader({ walletSlot }: NavHeaderProps) {
           {/* Desktop navigation */}
           <nav className="desktop-nav" aria-label="Main navigation">
             <ul className="nav-list">
-              <li><a href="/">Proposals</a></li>
-              <li><a href="/dashboard">Dashboard</a></li>
-              <li><a href="/history">Vote History</a></li>
+              <li><NavLink to="/" end className={({ isActive }) => isActive ? 'nav-active' : undefined}>Proposals</NavLink></li>
+              <li><NavLink to="/dashboard" className={({ isActive }) => isActive ? 'nav-active' : undefined}>Dashboard</NavLink></li>
+              <li><NavLink to="/history" className={({ isActive }) => isActive ? 'nav-active' : undefined}>Vote History</NavLink></li>
             </ul>
           </nav>
 
@@ -93,9 +94,9 @@ export function NavHeader({ walletSlot }: NavHeaderProps) {
           aria-hidden={!menuOpen}
         >
           <ul className="mobile-nav-list">
-            <li><a href="/" onClick={() => setMenuOpen(false)}>Proposals</a></li>
-            <li><a href="/dashboard" onClick={() => setMenuOpen(false)}>Dashboard</a></li>
-            <li><a href="/history" onClick={() => setMenuOpen(false)}>Vote History</a></li>
+            <li><NavLink to="/" end onClick={() => setMenuOpen(false)}>Proposals</NavLink></li>
+            <li><NavLink to="/dashboard" onClick={() => setMenuOpen(false)}>Dashboard</NavLink></li>
+            <li><NavLink to="/history" onClick={() => setMenuOpen(false)}>Vote History</NavLink></li>
           </ul>
         </nav>
       </div>
