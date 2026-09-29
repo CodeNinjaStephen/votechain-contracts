@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::types::{ConfigKey, ProposalState, Vote};
-use soroban_sdk::{symbol_short, Address, Env};
+use soroban_sdk::{symbol_short, Address, Env, String};
 
 /// # Event Schema
 ///
@@ -31,6 +31,7 @@ use soroban_sdk::{symbol_short, Address, Env};
 /// | update_quorum | `"qupdate"`    | `id: u64`     | `new_quorum: i128`                            |
 /// | transfer_admin | `"admxfer"`   | —             | `(old_admin, new_admin): (Address, Address)` |
 /// | extend_voting | `"vextend"`    | `id: u64`     | `(old_end_time, new_end_time): (u64, u64)`   |
+/// | cast_vote (comment) | `"vcomment"` | `id: u64` | `(voter, comment_hash): (Address, String)`   |
 /// Emits an `init` event when the contract is initialised.
 ///
 /// Topics: `("init",)`  
@@ -180,6 +181,20 @@ pub fn timelock_updated(env: &Env, admin: &Address, old_duration: u64, new_durat
     env.events().publish(
         (symbol_short!("tlupdate"),),
         (admin.clone(), old_duration, new_duration),
+    );
+}
+
+/// Emits a `vcomment` event when a voter attaches an off-chain comment hash to their vote.
+///
+/// Topics: `("vcomment", id)`
+/// Data: `(voter: Address, comment_hash: String)`
+///
+/// Indexers/frontends can subscribe to this topic to resolve and display the
+/// linked off-chain comment (e.g. render an IPFS gateway link for the CID).
+pub fn vote_comment_attached(env: &Env, id: u64, voter: &Address, comment_hash: &String) {
+    env.events().publish(
+        (symbol_short!("vcomment"), id),
+        (voter.clone(), comment_hash.clone()),
     );
 }
 

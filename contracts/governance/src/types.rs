@@ -113,6 +113,8 @@ pub enum ContractError {
     ExtensionWindowNotReached = 46,
     /// 47 – Proposal's voting period has already been extended once
     AlreadyExtended = 47,
+    /// 48 – Optional vote comment hash exceeds the maximum allowed byte length
+    CommentHashTooLong = 48,
 }
 
 /// Different types of proposals the governance contract supports.
@@ -404,6 +406,11 @@ pub enum DataKey {
 pub struct VoteRecord {
     pub vote_type: Vote,
     pub weight: i128,
+    /// Optional off-chain comment reference (e.g. an IPFS CID) explaining the
+    /// voter's rationale. Not validated on-chain — see issue #103. `None` when
+    /// the voter did not attach a comment, or when voting via
+    /// `cast_vote_with_delegators` (which does not accept a comment).
+    pub comment_hash: Option<String>,
 }
 
 /// Snapshot of all governance contract configuration values.

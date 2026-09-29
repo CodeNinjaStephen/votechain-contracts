@@ -50,6 +50,9 @@ const MAX_TITLE_LEN: u32 = 128;
 const MAX_DESC_LEN: u32 = 1024;
 // Maximum number of voters allowed in a single get_votes batch call.
 const MAX_BATCH_VOTERS: u32 = 50;
+// Maximum byte length of an optional off-chain comment hash (e.g. IPFS CID)
+// attached to a vote via `cast_vote`. See issue #103.
+const MAX_COMMENT_HASH_LEN: u32 = 64;
 
 /// Minimum admin transfer window in seconds (5 minutes).
 ///
@@ -387,11 +390,22 @@ impl GovernanceContract {
     /// - [`ContractError::AdminVoteRestricted`] if `restrict_admin_vote` is enabled and the admin
     ///   attempts to vote on a proposal they created.
     /// - [`ContractError::ContractPaused`] if the contract is paused.
+    /// - [`ContractError::CommentHashTooLong`] if `comment_hash` is provided and exceeds
+    ///   [`MAX_COMMENT_HASH_LEN`] (64) bytes.
+    ///
+    /// # Comment hash (issue #103)
+    /// `comment_hash` is an optional off-chain reference (e.g. an IPFS CID) that lets a
+    /// voter attach rationale for their vote. The contract only enforces a maximum byte
+    /// length — it does NOT validate that the hash is a well-formed CID or that content
+    /// exists at that address. Trust in the comment's integrity/availability is delegated
+    /// entirely to IPFS's content-addressing guarantees; the chain merely records the
+    /// pointer alongside the vote.
     pub fn cast_vote(
         env: Env,
         voter: Address,
         proposal_id: u64,
         vote: Vote,
+        comment_hash: Option<String>,
     ) -> Result<(), ContractError> {
         // SEC-005: auth first.
         voter.require_auth();
@@ -399,6 +413,11 @@ impl GovernanceContract {
         require_non_zero_address(&env, &voter)?;
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
+        }
+        if let Some(ref hash) = comment_hash {
+            if hash.len() as u32 > MAX_COMMENT_HASH_LEN {
+                return Err(ContractError::CommentHashTooLong);
+            }
         }
 
         let proposal = load_proposal(&env, proposal_id)?;
@@ -492,10 +511,14 @@ impl GovernanceContract {
             &VoteRecord {
                 vote_type: vote.clone(),
                 weight,
+                comment_hash: comment_hash.clone(),
             },
         );
         save_proposal(&env, &proposal);
         events::vote_cast(&env, proposal_id, &voter, &vote, weight, own_weight);
+        if let Some(hash) = comment_hash {
+            events::vote_comment_attached(&env, proposal_id, &voter, &hash);
+        }
         Ok(())
     }
 
@@ -1395,6 +1418,7 @@ impl GovernanceContract {
             &VoteRecord {
                 vote_type: vote.clone(),
                 weight: total_weight,
+                comment_hash: None,
             },
         );
         save_proposal(&env, &proposal);

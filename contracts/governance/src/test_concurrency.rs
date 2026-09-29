@@ -71,8 +71,8 @@ fn test_concurrent_votes_same_ledger_exactly_one_succeeds() {
         l.sequence_number = seq + 1;
         l.timestamp = ts + 1;
     });
-    let first = t.client.try_cast_vote(&voter, &id, &Vote::Yes);
-    let second = t.client.try_cast_vote(&voter, &id, &Vote::No);
+    let first = t.client.try_cast_vote(&voter, &id, &Vote::Yes, &None);
+    let second = t.client.try_cast_vote(&voter, &id, &Vote::No, &None);
 
     let results = [first, second];
     let ok_count = results.iter().filter(|r| matches!(r, Ok(Ok(_)))).count();
@@ -108,14 +108,14 @@ fn test_concurrent_votes_different_ledgers_second_rejected() {
         l.sequence_number = seq + 1;
         l.timestamp = ts + 5;
     });
-    assert_eq!(t.client.try_cast_vote(&voter, &id, &Vote::No), Ok(Ok(())));
+    assert_eq!(t.client.try_cast_vote(&voter, &id, &Vote::No, &None), Ok(Ok(())));
 
     t.env.ledger().with_mut(|l| {
         l.sequence_number = seq + 2;
         l.timestamp = ts + 10;
     });
     assert_eq!(
-        t.client.try_cast_vote(&voter, &id, &Vote::Yes),
+        t.client.try_cast_vote(&voter, &id, &Vote::Yes, &None),
         Err(Ok(ContractError::AlreadyVoted))
     );
 
@@ -137,7 +137,7 @@ fn test_burst_of_concurrent_votes_only_one_counted() {
     let mut ok = 0;
     let mut rejected = 0;
     for _ in 0..10 {
-        match t.client.try_cast_vote(&voter, &id, &Vote::Yes) {
+        match t.client.try_cast_vote(&voter, &id, &Vote::Yes, &None) {
             Ok(Ok(())) => ok += 1,
             Err(Ok(ContractError::AlreadyVoted)) => rejected += 1,
             other => panic!("unexpected result: {other:?}"),

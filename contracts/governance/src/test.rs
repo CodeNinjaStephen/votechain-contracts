@@ -59,7 +59,7 @@ fn setup_passed_proposal(env: &Env, client: &GovernanceContractClient, admin: &A
         &100,
         &3600,
     );
-    client.cast_vote(&voter, &id, &Vote::Yes);
+    client.cast_vote(&voter, &id, &Vote::Yes, &None);
     env.ledger().with_mut(|l| l.timestamp += 3601);
     client.finalise(&id);
     id
@@ -373,7 +373,7 @@ fn test_cannot_vote_twice() {
     let voter = Address::generate(&t.env);
     let id = create_test_proposal(&t, &voter);
     mint_and_vote(&t, &voter, id, Vote::Yes, 1_000_000);
-    t.client.cast_vote(&voter, &id, &Vote::No); // should panic
+    t.client.cast_vote(&voter, &id, &Vote::No, &None); // should panic
 }
 
 // ── TEST-013: access control negative tests ───────────────────────────────────
@@ -598,6 +598,60 @@ fn test_update_quorum_exceeding_snapshot_reverts() {
 }
 
 // ── end SC-027 ────────────────────────────────────────────────────────────────
+
+// ── issue #103: cast_vote comment_hash tests ──────────────────────────────────
+
+#[test]
+fn test_cast_vote_with_comment_hash_stored() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let voter = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &voter, &1_000);
+
+    let cid = String::from_str(
+        &t.env,
+        "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    );
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &Some(cid.clone()));
+
+    let record = t.client.get_vote(&id, &voter).unwrap();
+    assert_eq!(record.comment_hash, Some(cid));
+}
+
+#[test]
+fn test_cast_vote_without_comment_hash_is_none() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let voter = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &voter, &1_000);
+
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &None);
+
+    let record = t.client.get_vote(&id, &voter).unwrap();
+    assert_eq!(record.comment_hash, None);
+}
+
+/// comment_hash exceeding MAX_COMMENT_HASH_LEN (64 bytes) must revert.
+#[test]
+#[should_panic(expected = "Error(Contract, #48)")]
+fn test_cast_vote_comment_hash_too_long_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let voter = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &voter, &1_000);
+
+    // 65 'a' characters — one over the 64-byte cap.
+    let long_hash = String::from_str(&t.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &Some(long_hash));
+}
+
+// ── end issue #103 ─────────────────────────────────────────────────────────────
 
 // ── issue #105: extend_voting tests ───────────────────────────────────────────
 
@@ -946,7 +1000,7 @@ fn test_double_vote_same_choice_reverts() {
     let voter = Address::generate(&t.env);
     let id = create_test_proposal(&t, &voter);
     mint_and_vote(&t, &voter, id, Vote::Yes, 1_000_000);
-    t.client.cast_vote(&voter, &id, &Vote::Yes);
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &None);
 }
 
 #[test]
@@ -956,7 +1010,7 @@ fn test_double_vote_different_choice_reverts() {
     let voter = Address::generate(&t.env);
     let id = create_test_proposal(&t, &voter);
     mint_and_vote(&t, &voter, id, Vote::Yes, 1_000_000);
-    t.client.cast_vote(&voter, &id, &Vote::No);
+    t.client.cast_vote(&voter, &id, &Vote::No, &None);
 }
 
 #[test]
@@ -1042,7 +1096,7 @@ fn test_vote_with_zero_balance_reverts() {
     let t = setup_env();
     let voter = Address::generate(&t.env);
     let id = create_test_proposal(&t, &voter);
-    t.client.cast_vote(&voter, &id, &Vote::Yes);
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &None);
 }
 
 #[test]
@@ -1448,7 +1502,7 @@ fn make_passed_proposal_for_transfer(
         &100,
         &3600,
     );
-    client.cast_vote(&voter, &id, &Vote::Yes);
+    client.cast_vote(&voter, &id, &Vote::Yes, &None);
     env.ledger().with_mut(|l| l.timestamp += 3601);
     client.finalise(&id);
     id
@@ -1562,7 +1616,7 @@ fn test_admin_cannot_vote_own_proposal_when_restricted() {
         &3600,
     );
     // admin tries to vote on their own proposal — should panic
-    client.cast_vote(&admin, &id, &Vote::Yes);
+    client.cast_vote(&admin, &id, &Vote::Yes, &None);
 }
 
 /// When restrict_admin_vote is disabled, admin can vote on their own proposal.
@@ -1595,7 +1649,7 @@ fn test_admin_can_vote_own_proposal_when_not_restricted() {
         &3600,
     );
     // admin votes on their own proposal — should succeed
-    client.cast_vote(&admin, &id, &Vote::Yes);
+    client.cast_vote(&admin, &id, &Vote::Yes, &None);
     assert_eq!(client.get_proposal(&id).votes_yes, 10_000_000);
 }
 
@@ -1630,7 +1684,7 @@ fn test_non_admin_can_vote_when_admin_restricted() {
     );
     let voter = Address::generate(&env);
     tok.mint(&admin, &voter, &500_000_i128);
-    client.cast_vote(&voter, &id, &Vote::Yes);
+    client.cast_vote(&voter, &id, &Vote::Yes, &None);
     assert_eq!(client.get_proposal(&id).votes_yes, 500_000);
 }
 
@@ -1710,7 +1764,7 @@ fn test_cast_vote_reverts_when_paused() {
     let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
     tok.mint(&t.admin, &voter, &1_000_000_i128);
     t.client.pause(&t.admin);
-    t.client.cast_vote(&voter, &id, &Vote::Yes);
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &None);
 }
 
 /// finalise reverts when paused.
@@ -1734,7 +1788,7 @@ fn test_execute_reverts_when_paused() {
     let id = create_test_proposal(&t, &voter);
     let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
     tok.mint(&t.admin, &voter, &1_000_000_i128);
-    t.client.cast_vote(&voter, &id, &Vote::Yes);
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &None);
     t.env.ledger().with_mut(|l| l.timestamp += 3601);
     t.client.finalise(&id);
     t.client.pause(&t.admin);
@@ -2260,7 +2314,7 @@ fn test_initialize_restrict_admin_vote_enforced() {
         &3600,
     );
     // admin voting on their own proposal must revert
-    client.cast_vote(&admin, &id, &Vote::Yes);
+    client.cast_vote(&admin, &id, &Vote::Yes, &None);
 }
 
 /// Calling initialize a second time must revert with AlreadyInitialized (#13).
@@ -2543,7 +2597,7 @@ fn test_full_lifecycle_pass_and_execute() {
     assert_eq!(client.proposal_count(), 1);
 
     // vote
-    client.cast_vote(&voter, &id, &Vote::Yes);
+    client.cast_vote(&voter, &id, &Vote::Yes, &None);
     assert!(client.has_voted(&id, &voter));
     assert_eq!(client.get_proposal(&id).votes_yes, 1_000_000);
 
@@ -2590,7 +2644,7 @@ fn test_full_lifecycle_reject_below_quorum() {
         &3600,
     );
 
-    client.cast_vote(&voter, &id, &Vote::Yes);
+    client.cast_vote(&voter, &id, &Vote::Yes, &None);
     env.ledger().with_mut(|l| l.timestamp += 3601);
     client.finalise(&id);
     assert_eq!(client.get_proposal(&id).state, ProposalState::Rejected);
@@ -2673,8 +2727,8 @@ fn test_full_lifecycle_multiple_proposals_isolated() {
         &7200,
     );
 
-    client.cast_vote(&voter1, &id1, &Vote::Yes);
-    client.cast_vote(&voter2, &id2, &Vote::No);
+    client.cast_vote(&voter1, &id1, &Vote::Yes, &None);
+    client.cast_vote(&voter2, &id2, &Vote::No, &None);
 
     // votes don't bleed between proposals
     assert_eq!(client.get_proposal(&id1).votes_yes, 1_000_000);
@@ -2741,7 +2795,7 @@ fn test_full_lifecycle_pause_and_unpause() {
     client.unpause(&admin);
     assert!(!client.paused());
 
-    client.cast_vote(&voter, &id, &Vote::Yes);
+    client.cast_vote(&voter, &id, &Vote::Yes, &None);
     env.ledger().with_mut(|l| l.timestamp += 3601);
     client.finalise(&id);
     assert_eq!(client.get_proposal(&id).state, ProposalState::Passed);
@@ -3428,7 +3482,7 @@ fn test_flash_loan_attack_across_transactions_demonstration() {
     token_client.transfer(&lender, &attacker, &1_000_000_i128);
 
     // Attacker votes with the borrowed balance (1M tokens)
-    gov_client.cast_vote(&attacker, &id, &Vote::Yes);
+    gov_client.cast_vote(&attacker, &id, &Vote::Yes, &None);
     let prop_after_first_vote = gov_client.get_proposal(&id);
     assert_eq!(prop_after_first_vote.votes_yes, 1_000_000);
 
@@ -3440,7 +3494,7 @@ fn test_flash_loan_attack_across_transactions_demonstration() {
     // This is the key difference from a snapshot-based system where the vote weight
     // would have been locked in at proposal creation time.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        gov_client.cast_vote(&attacker, &id, &Vote::No);
+        gov_client.cast_vote(&attacker, &id, &Vote::No, &None);
     }));
 
     // Vote should fail because attacker has 0 balance now
@@ -3478,7 +3532,7 @@ fn test_single_transaction_prevents_double_voting() {
     // Attempt to vote again in same transaction (or within same block execution)
     // This must fail with AlreadyVoted due to the has_voted guard
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        t.client.cast_vote(&voter, &id, &Vote::No);
+        t.client.cast_vote(&voter, &id, &Vote::No, &None);
     }));
 
     assert!(result.is_err(), "Expected second vote to fail with AlreadyVoted");
@@ -3620,7 +3674,7 @@ fn test_execute_parameter_change_min_duration() {
     // Vote it through
     let tok = votechain_token::TokenContractClient::new(&env, &token_id);
     tok.mint(&admin, &proposer, &1_000_000_i128);
-    client.cast_vote(&proposer, &id, &Vote::Yes);
+    client.cast_vote(&proposer, &id, &Vote::Yes, &None);
 
     // Finalize
     env.ledger().with_mut(|l| l.timestamp += 3601);
@@ -3680,7 +3734,7 @@ fn test_execute_parameter_change_cooldown() {
     // Vote and execute
     let tok = votechain_token::TokenContractClient::new(&env, &token_id);
     tok.mint(&admin, &proposer, &1_000_000_i128);
-    client.cast_vote(&proposer, &id, &Vote::Yes);
+    client.cast_vote(&proposer, &id, &Vote::Yes, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 3601);
     client.finalise(&id);
@@ -3820,7 +3874,7 @@ fn test_mixed_proposal_types() {
 /// Full implementation is scheduled for v0.2.0 and involves:
 ///
 /// 1. Extending initialize() to accept Vec<VotingTokenConfig> with per-token weights
-/// 2. Updating cast_vote() to aggregate voting power across registered tokens
+/// 2. Updating cast_vote(, &None) to aggregate voting power across registered tokens
 /// 3. Adding admin functions: add_voting_token(), remove_voting_token(), set_token_weight()
 /// 4. Implementing governance-driven token management (v0.2.1)
 ///
@@ -3857,7 +3911,7 @@ fn test_multi_asset_voting_framework() {
     //   // Total weight = (1,000 × 100) + (5 × 200) / 100 = 1,010 votes
     //   // (Note: division by 100 is for percentage multipliers)
     //
-    //   client.cast_vote(&voter, &proposal_id, &Vote::Yes);
+    //   client.cast_vote(&voter, &proposal_id, &Vote::Yes, &None);
     //   // Vote weight is 1,010 (aggregated from both tokens)
     //
     // Tests to implement:
@@ -4017,7 +4071,7 @@ fn test_get_votes_single_voter() {
     tok.mint(&t.admin, &voter, &200);
 
     let id = create_test_proposal(&t, &proposer);
-    t.client.cast_vote(&voter, &id, &Vote::Yes);
+    t.client.cast_vote(&voter, &id, &Vote::Yes, &None);
 
     let mut voters = soroban_sdk::Vec::new(&t.env);
     voters.push_back(voter.clone());
@@ -4042,7 +4096,7 @@ fn test_get_votes_batch_of_50() {
     for _ in 0..50u32 {
         let v = Address::generate(&t.env);
         tok.mint(&t.admin, &v, &100);
-        t.client.cast_vote(&v, &id, &Vote::Yes);
+        t.client.cast_vote(&v, &id, &Vote::Yes, &None);
         voters.push_back(v);
     }
 
