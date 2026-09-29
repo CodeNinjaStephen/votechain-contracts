@@ -19,6 +19,7 @@ import { connectRedis } from "./middleware/redisCache";
 import { requestTracing } from "./middleware/requestTracing";
 import healthRoutes from "./routes/health";
 import proposalRoutes from "./routes/proposals";
+import analyticsRoutes from "./routes/analytics";
 import {
   notFoundHandler,
   globalErrorHandler,
@@ -109,6 +110,7 @@ app.use(express.json());
 app.use("/", healthRoutes);
 
 app.use("/api", proposalRoutes);
+app.use("/api", analyticsRoutes);
 
 // Catch unmatched routes — must come after all real route registrations.
 app.use(notFoundHandler);
