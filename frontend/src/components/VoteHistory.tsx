@@ -15,6 +15,7 @@
 import { useMemo, useState } from 'react';
 import type { Proposal, ProposalState, VoteRecord } from '../types';
 import { generateCsv } from '../utils/csv';
+import { isValidStellarAddress, isStellarAddressEmpty } from '../utils/stellarAddress';
 
 interface Props {
   proposals: Proposal[];
@@ -31,12 +32,19 @@ function ariaLabelForVoteType(type: VoteRecord['type']) {
 }
 
 export default function VoteHistory({ proposals }: Props) {
-  const [address, setAddress] = useState('GCFX4Q...');
+  const [address, setAddress] = useState('');
   const [fromDate, setFromDate] = useState('2025-01-01');
   const [toDate, setToDate] = useState('2026-12-31');
   const [stateFilter, setStateFilter] = useState<StateFilter>('All');
 
+  // Derive validation state (issue #17)
+  const addressEmpty   = isStellarAddressEmpty(address);
+  const addressValid   = !addressEmpty && isValidStellarAddress(address.trim());
+  const addressInvalid = !addressEmpty && !addressValid;
+
   const votes = useMemo(() => {
+    // Only filter when address is valid
+    if (!addressValid) return [];
     const normalizedAddress = address.trim().toLowerCase();
     const matched: Array<{ proposal: Proposal; vote: VoteRecord }> = [];
     proposals.forEach((proposal) => {
@@ -50,7 +58,7 @@ export default function VoteHistory({ proposals }: Props) {
       });
     });
     return matched;
-  }, [address, proposals, fromDate, toDate, stateFilter]);
+  }, [address, addressValid, proposals, fromDate, toDate, stateFilter]);
 
   const exportVotes = () => {
     const csv = generateCsv(votes.map((item) => item.vote));
@@ -65,6 +73,40 @@ export default function VoteHistory({ proposals }: Props) {
     URL.revokeObjectURL(url);
   };
 
+  /** Determine what to show in the table body */
+  function renderTableBody() {
+    if (addressEmpty) {
+      return (
+        <tr>
+          <td colSpan={5}>Enter a Stellar address above to view vote history.</td>
+        </tr>
+      );
+    }
+    if (addressInvalid) {
+      // Invalid address — table is hidden via disabled search; this is a fallback.
+      return null;
+    }
+    if (votes.length === 0) {
+      return (
+        <tr>
+          {/* Distinct "no votes found" message — not the same as invalid-address case (#17) */}
+          <td colSpan={5}>No votes found for this address in the selected range.</td>
+        </tr>
+      );
+    }
+    return votes.map(({ proposal, vote }, index) => (
+      <tr key={`${proposal.id}-${index}`}>
+        <td>{proposal.title}</td>
+        <td aria-label={ariaLabelForVoteType(vote.type)}>{vote.type}</td>
+        <td>{vote.weight}</td>
+        <td>
+          <span className={statusClass(proposal.state)}>{proposal.state}</span>
+        </td>
+        <td>{vote.votedAt}</td>
+      </tr>
+    ));
+  }
+
   return (
     <section aria-labelledby="vote-history-heading" className="card">
       <div className="header">
@@ -72,7 +114,12 @@ export default function VoteHistory({ proposals }: Props) {
           <h2 id="vote-history-heading">Wallet vote history</h2>
           <p>View votes cast by any public address without a wallet connection.</p>
         </div>
-        <button type="button" onClick={exportVotes} disabled={votes.length === 0} aria-disabled={votes.length === 0}>
+        <button
+          type="button"
+          onClick={exportVotes}
+          disabled={votes.length === 0}
+          aria-disabled={votes.length === 0}
+        >
           Export CSV
         </button>
       </div>
@@ -82,25 +129,46 @@ export default function VoteHistory({ proposals }: Props) {
           <input
             type="text"
             value={address}
-            placeholder="Enter public address"
+            placeholder="Enter public address (starts with G, 56 characters)"
             onChange={(event) => setAddress(event.target.value)}
-            aria-describedby="address-help"
+            aria-describedby="address-help address-error"
+            aria-invalid={addressInvalid || undefined}
           />
+          {/* Inline validation error (issue #17) */}
+          {addressInvalid && (
+            <span id="address-error" role="alert" className="field-error">
+              Invalid address — must start with G, be 56 characters, and use base32 encoding.
+            </span>
+          )}
         </label>
         <div id="address-help" className="visually-hidden">
-          Enter a public wallet address to view read-only vote history.
+          Enter a Stellar public wallet address to view read-only vote history.
         </div>
         <label>
           From
-          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(event) => setFromDate(event.target.value)}
+            disabled={addressInvalid}
+          />
         </label>
         <label>
           To
-          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+          <input
+            type="date"
+            value={toDate}
+            onChange={(event) => setToDate(event.target.value)}
+            disabled={addressInvalid}
+          />
         </label>
         <label>
           Proposal state
-          <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as StateFilter)}>
+          <select
+            value={stateFilter}
+            onChange={(event) => setStateFilter(event.target.value as StateFilter)}
+            disabled={addressInvalid}
+          >
             <option value="All">All</option>
             <option value="Active">Active</option>
             <option value="Passed">Passed</option>
@@ -110,38 +178,24 @@ export default function VoteHistory({ proposals }: Props) {
           </select>
         </label>
       </form>
-      <div className="table-wrapper" aria-live="polite">
-        <table>
-          <caption className="visually-hidden">Vote history for the selected address</caption>
-          <thead>
-            <tr>
-              <th scope="col">Proposal</th>
-              <th scope="col">Vote</th>
-              <th scope="col">Weight</th>
-              <th scope="col">State</th>
-              <th scope="col">Voted At</th>
-            </tr>
-          </thead>
-          <tbody>
-            {votes.map(({ proposal, vote }, index) => (
-              <tr key={`${proposal.id}-${index}`}>
-                <td>{proposal.title}</td>
-                <td aria-label={ariaLabelForVoteType(vote.type)}>{vote.type}</td>
-                <td>{vote.weight}</td>
-                <td>
-                  <span className={statusClass(proposal.state)}>{proposal.state}</span>
-                </td>
-                <td>{vote.votedAt}</td>
-              </tr>
-            ))}
-            {votes.length === 0 && (
+      {/* Hide table entirely when address is invalid (issue #17 — disable search) */}
+      {!addressInvalid && (
+        <div className="table-wrapper" aria-live="polite">
+          <table>
+            <caption className="visually-hidden">Vote history for the selected address</caption>
+            <thead>
               <tr>
-                <td colSpan={5}>No votes found for this address in the selected range.</td>
+                <th scope="col">Proposal</th>
+                <th scope="col">Vote</th>
+                <th scope="col">Weight</th>
+                <th scope="col">State</th>
+                <th scope="col">Voted At</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>{renderTableBody()}</tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }
