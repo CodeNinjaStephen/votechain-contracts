@@ -37,7 +37,8 @@ use storage::{
     get_max_active_proposals, get_max_duration, get_min_duration, get_min_proposal_balance,
     get_pending_admin, get_previous_wasm_hash, get_proposal_cooldown, get_restrict_admin_vote,
     get_timelock_duration, get_version, get_vote_record, get_voter_snapshot, get_voting_token,
-    has_voted, increment_active_proposals, is_initialized, is_paused, load_proposal, mark_voted,
+    has_extended, has_voted, increment_active_proposals, is_initialized, is_paused, load_proposal,
+    mark_extended, mark_voted,
     next_id, save_proposal, save_vote_record, save_voter_snapshot, set_admin,
     set_admin_transfer_expiry, set_contract_state, set_delegation, set_last_proposal,
     set_max_active_proposals, set_max_duration, set_min_duration, set_min_proposal_balance,
@@ -774,6 +775,86 @@ impl GovernanceContract {
         proposal.quorum = new_quorum;
         save_proposal(&env, &proposal);
         events::quorum_updated(&env, proposal_id, new_quorum);
+        Ok(())
+    }
+
+    /// Extends the voting period of an active proposal that is close to its deadline.
+    ///
+    /// Allows the admin to give a proposal with low participation more time to reach
+    /// quorum without cancelling and re-creating it (which would discard existing votes).
+    ///
+    /// # Parameters
+    /// - `additional_seconds`: number of seconds to add to `end_time`. Must be non-zero.
+    ///
+    /// # Errors
+    /// - [`ContractError::InvalidAddress`] if `admin` is the zero address.
+    /// - [`ContractError::NotAdmin`] if `admin` does not match the stored admin.
+    /// - [`ContractError::ContractPaused`] if the contract is paused.
+    /// - [`ContractError::InvalidDuration`] if `additional_seconds` is zero.
+    /// - [`ContractError::ProposalNotFound`] if `proposal_id` does not exist.
+    /// - [`ContractError::ProposalNotActive`] if the proposal is not in `Active` status.
+    /// - [`ContractError::VotingPeriodEnded`] if the voting period has already ended.
+    /// - [`ContractError::ExtensionWindowNotReached`] if called more than 24 hours before
+    ///   the current `end_time`.
+    /// - [`ContractError::AlreadyExtended`] if this proposal has already been extended once.
+    /// - [`ContractError::InvalidDurationRange`] if the new total duration
+    ///   (`new_end_time - start_time`) would exceed the contract's `max_duration`.
+    pub fn extend_voting(
+        env: Env,
+        admin: Address,
+        proposal_id: u64,
+        additional_seconds: u64,
+    ) -> Result<(), ContractError> {
+        // SEC-005: auth first.
+        admin.require_auth();
+        // SEC-004: reject zero address.
+        require_non_zero_address(&env, &admin)?;
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        if get_admin(&env)? != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        if additional_seconds == 0 {
+            return Err(ContractError::InvalidDuration);
+        }
+
+        let mut proposal = load_proposal(&env, proposal_id)?;
+        if proposal.state != ProposalState::Active {
+            return Err(ContractError::ProposalNotActive);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= proposal.end_time {
+            return Err(ContractError::VotingPeriodEnded);
+        }
+
+        // Only callable within the last 24 hours of the voting period.
+        const EXTENSION_WINDOW: u64 = 86_400;
+        if proposal.end_time - now > EXTENSION_WINDOW {
+            return Err(ContractError::ExtensionWindowNotReached);
+        }
+
+        if has_extended(&env, proposal_id) {
+            return Err(ContractError::AlreadyExtended);
+        }
+
+        let new_end_time = proposal
+            .end_time
+            .checked_add(additional_seconds)
+            .ok_or(ContractError::InvalidDurationRange)?;
+
+        // Extension is bounded: total duration must stay within max_duration.
+        let max_duration = get_max_duration(&env);
+        if new_end_time - proposal.start_time > max_duration {
+            return Err(ContractError::InvalidDurationRange);
+        }
+
+        let old_end_time = proposal.end_time;
+        proposal.end_time = new_end_time;
+        save_proposal(&env, &proposal);
+        mark_extended(&env, proposal_id);
+        events::voting_extended(&env, proposal_id, old_end_time, new_end_time);
         Ok(())
     }
 

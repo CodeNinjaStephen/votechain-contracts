@@ -30,6 +30,7 @@ use soroban_sdk::{symbol_short, Address, Env};
 /// | cancel        | `"cancelled"`  | `id: u64`     | `()`                                          |
 /// | update_quorum | `"qupdate"`    | `id: u64`     | `new_quorum: i128`                            |
 /// | transfer_admin | `"admxfer"`   | —             | `(old_admin, new_admin): (Address, Address)` |
+/// | extend_voting | `"vextend"`    | `id: u64`     | `(old_end_time, new_end_time): (u64, u64)`   |
 /// Emits an `init` event when the contract is initialised.
 ///
 /// Topics: `("init",)`  
@@ -179,5 +180,16 @@ pub fn timelock_updated(env: &Env, admin: &Address, old_duration: u64, new_durat
     env.events().publish(
         (symbol_short!("tlupdate"),),
         (admin.clone(), old_duration, new_duration),
+    );
+}
+
+/// Emits a `vextend` event when an admin extends a proposal's voting period.
+///
+/// Topics: `("vextend", id)`
+/// Data: `(old_end_time: u64, new_end_time: u64)`
+pub fn voting_extended(env: &Env, id: u64, old_end_time: u64, new_end_time: u64) {
+    env.events().publish(
+        (symbol_short!("vextend"), id),
+        (old_end_time, new_end_time),
     );
 }

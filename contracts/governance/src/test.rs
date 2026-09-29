@@ -599,6 +599,80 @@ fn test_update_quorum_exceeding_snapshot_reverts() {
 
 // ── end SC-027 ────────────────────────────────────────────────────────────────
 
+// ── issue #105: extend_voting tests ───────────────────────────────────────────
+
+#[test]
+fn test_extend_voting_success() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    let before = t.client.get_proposal(&id);
+    t.client.extend_voting(&t.admin, &id, &3600);
+    let after = t.client.get_proposal(&id);
+    assert_eq!(after.end_time, before.end_time + 3600);
+    assert_eq!(after.start_time, before.start_time);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_extend_voting_non_admin_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let non_admin = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    t.client.extend_voting(&non_admin, &id, &3600);
+}
+
+/// extend_voting must revert once the voting period has already ended.
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_extend_voting_after_end_time_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    // Default test proposal duration is 3600s; advance past end_time.
+    t.env.ledger().with_mut(|l| l.timestamp += 3601);
+    t.client.extend_voting(&t.admin, &id, &3600);
+}
+
+/// extend_voting can only be used once per proposal.
+#[test]
+#[should_panic(expected = "Error(Contract, #47)")]
+fn test_extend_voting_double_extension_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    t.client.extend_voting(&t.admin, &id, &3600);
+    // Second extension on the same proposal must revert with AlreadyExtended.
+    t.client.extend_voting(&t.admin, &id, &3600);
+}
+
+/// extend_voting must revert if the resulting total duration would exceed
+/// the contract's configured max_duration.
+#[test]
+#[should_panic(expected = "Error(Contract, #21)")]
+fn test_extend_voting_exceeding_max_duration_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    // max_duration is 2_592_000s (30 days); proposal duration is 3600s.
+    // Requesting an extension that would push total duration past max_duration must revert.
+    t.client.extend_voting(&t.admin, &id, &2_600_000);
+}
+
+/// extend_voting must revert on a proposal that is no longer Active.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_extend_voting_inactive_proposal_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+    t.client.cancel(&t.admin, &id);
+    t.client.extend_voting(&t.admin, &id, &3600);
+}
+
+// ── end issue #105 ─────────────────────────────────────────────────────────────
+
 // ── storage persistence tests ─────────────────────────────────────────────────
 
 #[test]

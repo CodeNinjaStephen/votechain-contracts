@@ -105,6 +105,14 @@ pub enum ContractError {
     InvalidWeightMultiplier = 42,
     /// 43 – Batch size exceeds the allowed maximum of MAX_BATCH_VOTERS (50)
     BatchTooLarge = 43,
+    /// 44 – Global cap on simultaneously active proposals has been reached
+    TooManyActiveProposals = 44,
+    /// 45 – Admin transfer acceptance window is shorter than MIN_TRANSFER_WINDOW
+    TransferWindowTooShort = 45,
+    /// 46 – extend_voting called outside the last 24 hours of the voting period
+    ExtensionWindowNotReached = 46,
+    /// 47 – Proposal's voting period has already been extended once
+    AlreadyExtended = 47,
 }
 
 /// Different types of proposals the governance contract supports.
@@ -385,6 +393,10 @@ pub enum DataKey {
     /// Monotonic counter tracking the number of currently active proposals (instance storage).
     /// Incremented on proposal creation, decremented on finalisation/cancellation.
     ActiveProposalsCount,
+
+    /// Whether `proposal_id`'s voting period has already been extended once (persistent storage).
+    /// Key space: one entry per unique proposal ID. Absence means "not yet extended".
+    ProposalExtended(u64),
 }
 
 #[contracttype]
