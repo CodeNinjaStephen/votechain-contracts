@@ -1,9 +1,18 @@
-import type { RedisClientType } from "redis";
+// Copyright 2024 VoteChain Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-// The leaderboard service accepts a nullable Redis client. When Redis is
-// unavailable (circuit-breaker open) callers pass null and functions degrade
-// gracefully by returning empty/default data.
-type MaybeRedis = RedisClientType | null | undefined;
+import { RedisClient } from '../middleware/redisCache';
 
 export interface LeaderboardEntry {
   address: string;

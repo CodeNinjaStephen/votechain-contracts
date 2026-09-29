@@ -37,6 +37,45 @@ For a fully reproducible environment without a local Rust installation, use Dock
 docker compose run --rm dev make test
 ```
 
+### Setting up pre-commit hooks
+
+VoteChain uses [pre-commit](https://pre-commit.com/) to run secret scanning before every commit. This prevents accidental exposure of private keys, mnemonics, or API tokens.
+
+Install the hooks once after cloning:
+
+```bash
+# Install the pre-commit tool (Python 3.8+ required)
+pip install pre-commit
+
+# Register the hooks with your local clone
+pre-commit install
+```
+
+After installation, every `git commit` automatically runs `detect-secrets` and the private-key check against your staged changes. A failed check aborts the commit and prints which file triggered the alert.
+
+You can also run the hooks manually at any time:
+
+```bash
+# Scan all tracked files
+pre-commit run --all-files
+
+# Scan only staged changes
+pre-commit run
+```
+
+If a finding is a false positive (e.g., a test fixture or a generated hash), add it to `.secrets.baseline` and commit the updated baseline:
+
+```bash
+# Regenerate the baseline with the false positive acknowledged
+detect-secrets scan --baseline .secrets.baseline
+
+# Review the diff, then stage and commit
+git add .secrets.baseline
+git commit -m "chore: update secrets baseline"
+```
+
+> Secrets in CI are also scanned by the `secret-scan` job in `.github/workflows/ci.yml` using [gitleaks](https://github.com/gitleaks/gitleaks-action). Both the local hook and the CI job must pass for a PR to be mergeable.
+
 ---
 
 ## Issue Triage Process
@@ -377,3 +416,35 @@ Pull requests that fix bugs are welcome alongside or instead of an issue.
 ## License
 
 By contributing you agree that your contributions will be licensed under the [Apache 2.0 License](LICENSE).
+
+---
+
+## Updating test snapshots
+
+Snapshot tests in `contracts/*/test_snapshots/test/` record the full Soroban
+ledger state (events, auth, storage) after each test run.  CI fails if the
+committed snapshots differ from what the current code produces.
+
+### When to update snapshots
+
+Update snapshots whenever you intentionally change an event structure, add a
+new event field, or rename a symbol. **Never** update snapshots to silence an
+unexpected failure — investigate the root cause first.
+
+### How to update
+
+```bash
+# Regenerate all snapshots
+SOROBAN_TEST_SNAPSHOT_UPDATE=1 cargo test
+
+# Or regenerate snapshots for a single contract
+SOROBAN_TEST_SNAPSHOT_UPDATE=1 cargo test -p votechain_governance
+SOROBAN_TEST_SNAPSHOT_UPDATE=1 cargo test -p votechain_token
+
+# Review every changed snapshot file before committing
+git diff contracts/*/test_snapshots/
+```
+
+Commit the updated JSON files together with your code change so reviewers can
+see exactly what the event shape change looks like.
+
