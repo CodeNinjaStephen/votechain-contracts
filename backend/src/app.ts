@@ -17,6 +17,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { connectRedis } from "./middleware/redisCache";
 import { requestTracing } from "./middleware/requestTracing";
+import { metricsMiddleware, metricsHandler } from "./middleware/metrics";
 import healthRoutes from "./routes/health";
 import proposalRoutes from "./routes/proposals";
 import {
@@ -102,10 +103,13 @@ app.options("*", cors(corsOptions));
 app.use(cors(corsOptions));
 
 app.use(requestTracing);
+app.use(metricsMiddleware);
 app.use(express.json());
 
-// Health and readiness probes — mounted BEFORE rate-limiting and auth so
-// load balancers and orchestrators can always reach them without credentials.
+// Health, readiness and metrics — mounted BEFORE rate-limiting and auth so
+// load balancers, orchestrators and Prometheus can always reach them without
+// credentials.
+app.get("/metrics", metricsHandler);
 app.use("/", healthRoutes);
 
 app.use("/api", proposalRoutes);
