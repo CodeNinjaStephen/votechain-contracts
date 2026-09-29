@@ -23,10 +23,11 @@ import {
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { NavHeader } from "./components/NavHeader";
 import { useTranslation } from "react-i18next";
+import { useTransactionStatus } from "./hooks/useTransactionStatus";
+import { TransactionToast } from "./components/TransactionToast";
 
 /**
- * Page components — all consume WalletContext / ProposalContext from
- * providers in main.tsx (issue #10 — no prop-drilling).
+ * Page components — consumed lazily to keep the initial bundle small.
  */
 const ProposalList     = React.lazy(() => import('./pages/ProposalList'));
 const ProposalDetail   = React.lazy(() => import('./pages/ProposalDetail'));
