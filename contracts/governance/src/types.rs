@@ -103,6 +103,8 @@ pub enum ContractError {
     CannotRemoveLastToken = 41,
     /// 42 – Weight multiplier must be greater than zero
     InvalidWeightMultiplier = 42,
+    /// 43 – Batch size exceeds the allowed maximum of MAX_BATCH_VOTERS (50)
+    BatchTooLarge = 43,
 }
 
 /// Different types of proposals the governance contract supports.
@@ -187,6 +189,14 @@ pub struct Proposal {
     pub execute_after: u64,
     /// Type of proposal (Standard or ParameterChange)
     pub proposal_type: ProposalType,
+    /// Total token supply snapshot captured at proposal creation time.
+    ///
+    /// Used by `update_quorum` to bound the new quorum against the supply
+    /// that was in effect when the proposal was created, rather than the
+    /// live supply (which may have changed due to minting or burning after
+    /// the proposal was opened). This prevents a scenario where tokens are
+    /// burned after creation, making the quorum permanently unachievable.
+    pub supply_snapshot: i128,
 }
 
 /// Pending multi-sig action types.
@@ -363,6 +373,18 @@ pub enum DataKey {
     /// For backward compatibility, single-token DAOs store a token in `VotingToken`
     /// and may also have a corresponding entry in `VotingTokens`.
     VotingTokens,
+
+    /// WASM hash of the contract version prior to the most recent upgrade (instance storage).
+    /// Used for rollback verification. Cleared on re-upgrade.
+    PreviousWasmHash,
+
+    /// Global cap on the number of simultaneously active proposals (instance storage).
+    /// Defaults to 50 if not set.
+    MaxActiveProposals,
+
+    /// Monotonic counter tracking the number of currently active proposals (instance storage).
+    /// Incremented on proposal creation, decremented on finalisation/cancellation.
+    ActiveProposalsCount,
 }
 
 #[contracttype]
@@ -370,4 +392,33 @@ pub enum DataKey {
 pub struct VoteRecord {
     pub vote_type: Vote,
     pub weight: i128,
+}
+
+/// Snapshot of all governance contract configuration values.
+///
+/// Returned by [`GovernanceContract::get_config`]. Bundles every config field
+/// so off-chain tooling can fetch everything with a single RPC call.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ContractConfig {
+    /// Current admin address.
+    pub admin: Address,
+    /// Address of the governance token contract.
+    pub voting_token: Address,
+    /// Minimum token balance required to create a proposal (0 = no minimum).
+    pub min_proposal_balance: i128,
+    /// Seconds a proposer must wait between consecutive proposals (0 = no cooldown).
+    pub proposal_cooldown: u64,
+    /// Whether the admin is restricted from voting on proposals they created.
+    pub restrict_admin_vote: bool,
+    /// Whether the contract is currently paused.
+    pub paused: bool,
+    /// Mandatory delay (seconds) between a proposal passing and execution (0 = no delay).
+    pub timelock_duration: u64,
+    /// Minimum allowed voting duration in seconds.
+    pub min_duration: u64,
+    /// Maximum allowed voting duration in seconds.
+    pub max_duration: u64,
+    /// Contract semantic version as `(major, minor, patch)`.
+    pub version: (u32, u32, u32),
 }

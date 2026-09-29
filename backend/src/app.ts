@@ -1,6 +1,22 @@
+// Copyright 2024 VoteChain Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 import express from "express";
-import path from "path";
+import cors from "cors";
+import helmet from "helmet";
 import { connectRedis } from "./middleware/redisCache";
+import { requestTracing } from "./middleware/requestTracing";
 import healthRoutes from "./routes/health";
 import proposalRoutes from "./routes/proposals";
 import {
@@ -11,16 +27,15 @@ import {
 // ---------------------------------------------------------------------------
 // Environment variable validation
 // ---------------------------------------------------------------------------
-// Validates required env vars at startup so the process fails fast with a
-// clear diagnostic instead of a cryptic runtime panic later.
 
 interface EnvConfig {
   PORT: string;
   REDIS_URL: string;
+  ALLOWED_ORIGINS: string;
 }
 
 function validateEnv(): EnvConfig {
-  const required: Array<keyof EnvConfig> = ["REDIS_URL"];
+  const required: Array<keyof Pick<EnvConfig, "REDIS_URL">> = ["REDIS_URL"];
   const missing: string[] = [];
 
   for (const key of required) {
@@ -42,16 +57,50 @@ function validateEnv(): EnvConfig {
   return {
     PORT: process.env.PORT ?? "3001",
     REDIS_URL: process.env.REDIS_URL!,
+    // Default to localhost dev origin; production sets this to the real domain.
+    ALLOWED_ORIGINS:
+      process.env.ALLOWED_ORIGINS ?? "http://localhost:5173",
   };
 }
 
 const env = validateEnv();
 
 // ---------------------------------------------------------------------------
+// CORS configuration (#32)
+// ---------------------------------------------------------------------------
+
+const allowedOrigins = env.ALLOWED_ORIGINS.split(",").map((o) => o.trim());
+
+const corsOptions: cors.CorsOptions = {
+  origin(origin, callback) {
+    // Allow requests with no origin (curl, server-to-server, health checks)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
+  exposedHeaders: ["X-Request-Id", "X-Cache"],
+  credentials: true,
+  // Tells browsers to cache the preflight response for 10 minutes
+  maxAge: 600,
+};
+
+// ---------------------------------------------------------------------------
 // App setup
 // ---------------------------------------------------------------------------
 
 const app = express();
+
+// Security headers — must come before routes
+app.use(helmet());
+
+// Handle preflight OPTIONS for all routes
+app.options("*", cors(corsOptions));
+app.use(cors(corsOptions));
+
 app.use(requestTracing);
 app.use(express.json());
 
@@ -67,8 +116,10 @@ app.use(notFoundHandler);
 // Global error handler — must be the very last middleware registered.
 app.use(globalErrorHandler);
 
-const PORT = process.env.PORT ?? 3001;
+const PORT = parseInt(env.PORT, 10);
 
+// connectRedis now degrades gracefully on failure (#38) — the server always
+// starts regardless of whether Redis is reachable.
 connectRedis(env.REDIS_URL).then(() => {
   app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
 });

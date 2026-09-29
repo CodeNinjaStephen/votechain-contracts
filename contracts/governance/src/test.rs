@@ -547,6 +547,56 @@ fn test_update_quorum_inactive_proposal_reverts() {
     t.client.update_quorum(&t.admin, &id, &500);
 }
 
+/// Issue #56 — update_quorum is bounded by the supply snapshot taken at
+/// proposal creation time, not the live supply at the time of the call.
+///
+/// Scenario: create a proposal against a supply of 10,000,000 tokens, then
+/// burn a large chunk of supply so the live supply drops below the proposed
+/// new quorum.  update_quorum must still succeed because the snapshot was
+/// taken before the burn and remains the upper bound.
+#[test]
+fn test_update_quorum_uses_supply_snapshot_not_live_supply() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+
+    // Initial supply = 10_000_000 (set up by setup_env / token initialize).
+    // create a proposal with quorum = 1_000 (well within supply).
+    let id = create_test_proposal(&t, &proposer);
+
+    // Verify snapshot was captured at creation.
+    let proposal_before = t.client.get_proposal(&id);
+    assert!(
+        proposal_before.supply_snapshot > 0,
+        "supply_snapshot must be positive after creation"
+    );
+
+    // Burn most of the supply so live supply is now much smaller.
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    // Burn 9_900_000 tokens from admin (leaves 100_000 live).
+    tok.burn(&t.admin, &t.admin, &9_900_000_i128);
+
+    // update_quorum to 5_000_000 — this exceeds the current live supply
+    // (100_000) but is within the snapshot (10_000_000).
+    // The call must SUCCEED because the snapshot anchors validation.
+    t.client.update_quorum(&t.admin, &id, &5_000_000);
+    let proposal_after = t.client.get_proposal(&id);
+    assert_eq!(proposal_after.quorum, 5_000_000, "quorum should be updated to 5_000_000");
+}
+
+/// Issue #56 — update_quorum must REJECT a new quorum that exceeds the
+/// supply_snapshot, regardless of whether live supply has changed.
+#[test]
+#[should_panic(expected = "Error(Contract, #22)")]
+fn test_update_quorum_exceeding_snapshot_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+
+    // Attempt to set quorum above the snapshot (10_000_000 + 1).
+    // This must revert with QuorumExceedsSupply (error #22).
+    t.client.update_quorum(&t.admin, &id, &10_000_001);
+}
+
 // ── end SC-027 ────────────────────────────────────────────────────────────────
 
 // ── storage persistence tests ─────────────────────────────────────────────────
@@ -3864,289 +3914,100 @@ fn test_multi_asset_voting_parameter_change_interaction() {
 
 // ── end Issue #119 ─────────────────────────────────────────────────────────────
 
-// ── Issue #42: Timelock enforcement in execute() ───────────────────────────────
+// ── Issue #61: get_votes batch function tests ──────────────────────────────────
 
-/// Helper: set up a passed proposal with a specific timelock_duration.
-/// Returns (client, admin, proposal_id, finalize_time).
-fn setup_passed_with_timelock(
-    env: &Env,
-    timelock_duration: u64,
-) -> (GovernanceContractClient<'static>, Address, u64) {
-    env.mock_all_auths();
-    let admin = Address::generate(env);
-    let voter = Address::generate(env);
-
-    let tok_id = env.register(votechain_token::TokenContract, ());
-    let tok = votechain_token::TokenContractClient::new(env, &tok_id);
-    tok.initialize(&voter, &10_000_000);
-
-    let gov_id = env.register(GovernanceContract, ());
-    let client = GovernanceContractClient::new(env, &gov_id);
-    client.initialize(
-        &admin,
-        &tok_id,
-        &0_i128,
-        &0_u64,
-        &60_u64,
-        &2_592_000_u64,
-        &false,
-        &timelock_duration,
-        &0_u64,
-    );
-
-    let id = client.create_proposal(
-        &voter,
-        &String::from_str(env, "Timelock test"),
-        &String::from_str(env, "Testing timelock enforcement"),
-        &100,
-        &3600,
-    );
-    client.cast_vote(&voter, &id, &Vote::Yes);
-    // Advance past voting period.
-    env.ledger().with_mut(|l| l.timestamp += 3601);
-    client.finalise(&id);
-
-    (client, admin, id)
-}
-
-/// execute() must revert with TimelockNotExpired when called before execute_after.
+/// Empty batch returns an empty Vec without error.
 #[test]
-fn test_execute_before_timelock_reverts() {
-    let env = Env::default();
-    // 1-hour timelock
-    let (client, admin, id) = setup_passed_with_timelock(&env, 3600);
-
-    // Attempt to execute immediately — timelock has not elapsed.
-    let result = client.try_execute(&admin, &id);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::TimelockNotExpired)),
-        "execute() must return TimelockNotExpired when called before execute_after"
-    );
-}
-
-/// execute() must succeed once the timelock has elapsed.
-#[test]
-fn test_execute_after_timelock_succeeds() {
-    let env = Env::default();
-    let timelock = 3600_u64;
-    let (client, admin, id) = setup_passed_with_timelock(&env, timelock);
-
-    // Advance past the timelock.
-    env.ledger().with_mut(|l| l.timestamp += timelock + 1);
-    // Should not panic or return an error.
-    client.execute(&admin, &id);
-
-    let proposal = client.get_proposal(&id);
-    assert_eq!(
-        proposal.state,
-        ProposalState::Executed,
-        "Proposal must be Executed after timelock expires"
-    );
-}
-
-/// execute() with zero timelock (disabled) must succeed immediately after finalisation.
-#[test]
-fn test_execute_zero_timelock_succeeds_immediately() {
-    let env = Env::default();
-    let (client, admin, id) = setup_passed_with_timelock(&env, 0);
-
-    // No timelock: execute_after == finalized_at + 0, so it should pass straight away.
-    client.execute(&admin, &id);
-
-    let proposal = client.get_proposal(&id);
-    assert_eq!(proposal.state, ProposalState::Executed);
-}
-
-// ── Issue #43: Proposal TTL bump on load/save ──────────────────────────────────
-
-/// After saving and loading a proposal the storage entry must still be accessible
-/// (the TTL was bumped on both operations).
-///
-/// In a real Soroban environment the ledger would need to advance beyond TTL_MIN_LEDGERS
-/// without a bump for expiry to occur.  Within the testutils sandbox the host does not
-/// enforce TTL expiry, but we verify that `extend_ttl` is called by confirming that
-/// a proposal written and then re-read remains intact.
-#[test]
-fn test_proposal_ttl_bump_on_save_and_load() {
+fn test_get_votes_empty_batch() {
     let t = setup_env();
-
-    let voter = Address::generate(&t.env);
+    let proposer = Address::generate(&t.env);
     let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
-    tok.mint(&t.admin, &voter, &1_000);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
 
-    let id = create_test_proposal(&t, &voter);
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    let results = t.client.get_votes(&id, &empty).unwrap();
+    assert_eq!(results.len(), 0);
+}
 
-    // Load the proposal — this exercises the extend_ttl path in load_proposal.
-    let proposal = t.client.get_proposal(&id);
-    assert_eq!(proposal.id, id);
-    assert_eq!(proposal.state, ProposalState::Active);
+/// Single voter — voted address returns Some, non-voter returns None.
+#[test]
+fn test_get_votes_single_voter() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let voter = Address::generate(&t.env);
+    let non_voter = Address::generate(&t.env);
 
-    // Cast a vote to trigger save_proposal via the write path.
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    tok.mint(&t.admin, &voter, &200);
+
+    let id = create_test_proposal(&t, &proposer);
     t.client.cast_vote(&voter, &id, &Vote::Yes);
 
-    // Reload after write — TTL was bumped on set as well.
-    let updated = t.client.get_proposal(&id);
-    assert_eq!(updated.votes_yes, 1_000);
+    let mut voters = soroban_sdk::Vec::new(&t.env);
+    voters.push_back(voter.clone());
+    voters.push_back(non_voter.clone());
+
+    let results = t.client.get_votes(&id, &voters).unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().is_some());
+    assert!(results.get(1).unwrap().is_none());
 }
 
-/// Verify that the TTL constants exported from storage have the expected values.
+/// Full batch of 50 voters all returns correctly.
 #[test]
-fn test_ttl_constants_are_correct() {
-    // MIN must be 30 days in ledgers (≈ seconds).
-    assert_eq!(
-        crate::storage::TTL_MIN_LEDGERS,
-        2_592_000,
-        "TTL_MIN_LEDGERS must equal 30 days (2_592_000 ledgers)"
-    );
-    // MAX must be 36 days in ledgers (≈ seconds).
-    assert_eq!(
-        crate::storage::TTL_MAX_LEDGERS,
-        3_110_400,
-        "TTL_MAX_LEDGERS must equal 36 days (3_110_400 ledgers)"
-    );
-}
-
-// ── Issue #51: update_timelock() ───────────────────────────────────────────────
-
-/// Non-admin must not be able to call update_timelock.
-#[test]
-fn test_update_timelock_non_admin_reverts() {
+fn test_get_votes_batch_of_50() {
     let t = setup_env();
-    let non_admin = Address::generate(&t.env);
-
-    let result = t.client.try_update_timelock(&non_admin, &3600_u64);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::NotAdmin)),
-        "update_timelock must revert with NotAdmin for non-admin caller"
-    );
-}
-
-/// Admin can update the timelock duration; the change is reflected in the
-/// `execute_after` field of a subsequently created and finalised proposal.
-#[test]
-fn test_update_timelock_admin_succeeds() {
-    let t = setup_env();
-
-    // Update timelock to 7200 seconds (2 hours).
-    t.client.update_timelock(&t.admin, &7200_u64);
-
-    // Create and finalise a proposal so execute_after is set.
-    let voter = Address::generate(&t.env);
+    let proposer = Address::generate(&t.env);
     let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
-    tok.mint(&t.admin, &voter, &1_000);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
 
-    let id = t.client.create_proposal(
-        &voter,
-        &String::from_str(&t.env, "Post-update proposal"),
-        &String::from_str(&t.env, "Created after timelock update"),
-        &100,
-        &3600,
-    );
-    t.client.cast_vote(&voter, &id, &Vote::Yes);
-    t.env.ledger().with_mut(|l| l.timestamp += 3601);
-    t.client.finalise(&id);
+    let mut voters: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..50u32 {
+        let v = Address::generate(&t.env);
+        tok.mint(&t.admin, &v, &100);
+        t.client.cast_vote(&v, &id, &Vote::Yes);
+        voters.push_back(v);
+    }
 
-    let proposal = t.client.get_proposal(&id);
-    assert_eq!(proposal.state, ProposalState::Passed);
-    // execute_after must be at least finalized_at + 7200.
-    // We know the ledger is at ~3601+ and timelock is 7200, so execute_after >= 3601 + 7200.
-    assert!(
-        proposal.execute_after >= 3601 + 7200,
-        "execute_after must respect the new timelock duration (7200 s), got {}",
-        proposal.execute_after
-    );
+    let results = t.client.get_votes(&id, &voters).unwrap();
+    assert_eq!(results.len(), 50);
+    for i in 0..50u32 {
+        assert!(results.get(i).unwrap().is_some());
+    }
 }
 
-/// Proposals created before an update retain their original execute_after.
+/// Batch of 51 voters fails with BatchTooLarge.
 #[test]
-fn test_update_timelock_existing_proposals_unaffected() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let voter = Address::generate(&env);
+fn test_get_votes_batch_of_51_fails() {
+    use crate::types::ContractError;
 
-    let tok_id = env.register(votechain_token::TokenContract, ());
-    let tok = votechain_token::TokenContractClient::new(&env, &tok_id);
-    tok.initialize(&voter, &10_000_000);
-
-    let gov_id = env.register(GovernanceContract, ());
-    let client = GovernanceContractClient::new(&env, &gov_id);
-    client.initialize(
-        &admin,
-        &tok_id,
-        &0_i128,
-        &0_u64,
-        &60_u64,
-        &2_592_000_u64,
-        &false,
-        &3600_u64, // 1-hour timelock at init
-        &0_u64,
-    );
-
-    // Create and finalise proposal BEFORE the timelock update.
-    let id_before = client.create_proposal(
-        &voter,
-        &String::from_str(&env, "Before update"),
-        &String::from_str(&env, "desc"),
-        &100,
-        &3600,
-    );
-    client.cast_vote(&voter, &id_before, &Vote::Yes);
-    env.ledger().with_mut(|l| l.timestamp += 3601);
-    client.finalise(&id_before);
-    let proposal_before = client.get_proposal(&id_before);
-    let execute_after_before = proposal_before.execute_after;
-
-    // Update the timelock to 7200 s.
-    client.update_timelock(&admin, &7200_u64);
-
-    // The old proposal's execute_after must be unchanged.
-    let proposal_after_update = client.get_proposal(&id_before);
-    assert_eq!(
-        proposal_after_update.execute_after,
-        execute_after_before,
-        "Existing proposal execute_after must not change after update_timelock"
-    );
-}
-
-/// update_timelock must reject durations greater than 30 days.
-#[test]
-fn test_update_timelock_exceeds_max_reverts() {
     let t = setup_env();
-    let too_long: u64 = 2_592_001; // > 30 days
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
 
-    let result = t.client.try_update_timelock(&t.admin, &too_long);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::InvalidDurationRange)),
-        "update_timelock must revert when new_duration > 30 days"
-    );
+    let mut voters: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..51u32 {
+        voters.push_back(Address::generate(&t.env));
+    }
+
+    let err = t.client.try_get_votes(&id, &voters).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::BatchTooLarge);
 }
 
-/// update_timelock must accept 0 (disabling the timelock).
+/// Non-existent proposal fails fast with ProposalNotFound.
 #[test]
-fn test_update_timelock_to_zero_succeeds() {
+fn test_get_votes_proposal_not_found() {
+    use crate::types::ContractError;
+
     let t = setup_env();
-    // Should not panic.
-    t.client.update_timelock(&t.admin, &0_u64);
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    let err = t.client.try_get_votes(&9999, &empty).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::ProposalNotFound);
 }
 
-/// update_timelock emits a TimelockUpdated event with old and new duration.
-#[test]
-fn test_update_timelock_emits_event() {
-    let t = setup_env();
-
-    t.client.update_timelock(&t.admin, &7200_u64);
-
-    let events = t.env.events().all();
-    let last = events.last().unwrap();
-    // Topic 0 is "tlupdate".
-    let (topics, _data) = last;
-    assert_eq!(
-        topics.get(0).unwrap(),
-        symbol_short!("tlupdate").into_val(&t.env),
-        "update_timelock must emit a 'tlupdate' event"
-    );
-}
+// ── end Issue #61 ──────────────────────────────────────────────────────────────

@@ -1,48 +1,37 @@
-# Configuration for probot/stale bot
-# Marks issues and PRs as stale after inactivity and closes them if no further action
+# Configuration for probot-stale - https://github.com/probot/stale
+# Enforced by .github/workflows/stale.yml
 
-name: Mark stale issues and pull requests
+# Issues: 60 days of inactivity -> stale; 14 more days -> closed
+daysUntilStale: 60
+daysUntilClose: 14
 
-on:
-  schedule:
-    # Run every day at 00:00 UTC
-    - cron: '0 0 * * *'
+exemptLabels:
+  - pinned
+  - security
+  - critical
 
-jobs:
-  stale:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/stale@v9
-        with:
-          # Stale issue management
-          days-before-stale: 60
-          days-before-close: 30
-          stale-issue-label: 'stale'
-          close-issue-label: 'closed-stale'
-          stale-issue-message: |
-            This issue has been inactive for 60 days. If the issue is still relevant, please comment to keep it open. Otherwise, it will be closed automatically in 30 days.
-            
-            **Note:** Issues marked as `critical` or `security` will not be auto-closed.
-          close-issue-message: |
-            This issue was closed due to 90 days of inactivity. If you believe this is still relevant, feel free to reopen it or create a new issue with an update.
+staleLabel: stale
 
-          # Stale PR management
-          days-before-pr-stale: 30
-          days-before-pr-close: 14
-          stale-pr-label: 'stale'
-          close-pr-label: 'closed-stale'
-          stale-pr-message: |
-            This PR has been inactive for 30 days. If you plan to continue work, please comment to keep it open. Otherwise, it will be closed automatically in 14 days.
-          close-pr-message: |
-            This PR was closed due to 44 days of inactivity. If you'd like to continue, feel free to reopen or create a new PR.
+markComment: >
+  This issue has been automatically marked as stale because it has had no
+  activity for 60 days. It will be closed in 14 days if no further activity
+  occurs. To keep it open, leave a comment or remove the `stale` label.
+  If it is closed, you can reopen it at any time or comment asking a
+  maintainer to reopen it.
 
-          # Exemptions
-          exempt-issue-labels: 'critical,security,blocked'
-          exempt-pr-labels: 'critical,security,blocked'
-          
-          # Ignore PRs with draft status
-          ignore-pr-updates: false
-          
-          # Only mark issues that don't have pinned issues
-          any-of-labels: ''
-          all-of-labels: ''
+closeComment: >
+  Closed due to inactivity. If this is still relevant, please reopen it
+  (or comment asking a maintainer to reopen) with any updated details.
+
+# PRs: 30 days of inactivity -> stale; 7 more days -> closed
+pulls:
+  daysUntilStale: 30
+  daysUntilClose: 7
+  markComment: >
+    This pull request has been automatically marked as stale because it has
+    had no activity for 30 days. It will be closed in 7 days if no further
+    activity occurs. Push a commit or leave a comment to keep it open. If it
+    is closed, you can reopen it at any time and continue the work.
+  closeComment: >
+    Closed due to inactivity. Feel free to reopen this pull request when you
+    are ready to continue.
