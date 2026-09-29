@@ -15,7 +15,7 @@
 #![no_std]
 
 mod events;
-mod storage;
+pub(crate) mod storage;
 mod types;
 
 #[cfg(test)]
@@ -32,16 +32,17 @@ mod test_event_snapshots;
 use soroban_sdk::{contract, contractclient, contractimpl, token, Address, Env, String, Vec};
 use types::{ConfigKey, ContractConfig, ContractError, ContractState, ProposalState, ProposalType, Proposal, Vote, VoteRecord};
 use storage::{
-    clear_delegation, clear_pending_admin, get_admin, get_admin_transfer_expiry,
-    get_contract_state, get_delegation, get_last_proposal, get_max_duration, get_min_duration,
-    get_min_proposal_balance, get_pending_admin, get_previous_wasm_hash, get_proposal_cooldown,
-    get_restrict_admin_vote, get_timelock_duration, get_version, get_vote_record,
-    get_voter_snapshot, get_voting_token, has_voted, is_initialized, is_paused, load_proposal,
-    mark_voted, next_id, save_proposal, save_vote_record, save_voter_snapshot, set_admin,
+    clear_delegation, clear_pending_admin, count_active_proposals, decrement_active_proposals,
+    get_admin, get_admin_transfer_expiry, get_contract_state, get_delegation, get_last_proposal,
+    get_max_active_proposals, get_max_duration, get_min_duration, get_min_proposal_balance,
+    get_pending_admin, get_previous_wasm_hash, get_proposal_cooldown, get_restrict_admin_vote,
+    get_timelock_duration, get_version, get_vote_record, get_voter_snapshot, get_voting_token,
+    has_voted, increment_active_proposals, is_initialized, is_paused, load_proposal, mark_voted,
+    next_id, save_proposal, save_vote_record, save_voter_snapshot, set_admin,
     set_admin_transfer_expiry, set_contract_state, set_delegation, set_last_proposal,
-    set_max_duration, set_min_duration, set_min_proposal_balance, set_paused, set_pending_admin,
-    set_previous_wasm_hash, set_proposal_cooldown, set_restrict_admin_vote, set_timelock_duration,
-    set_version, set_voting_token,
+    set_max_active_proposals, set_max_duration, set_min_duration, set_min_proposal_balance,
+    set_paused, set_pending_admin, set_previous_wasm_hash, set_proposal_cooldown,
+    set_restrict_admin_vote, set_timelock_duration, set_version, set_voting_token,
 };
 
 const MAX_TITLE_LEN: u32 = 128;
@@ -282,10 +283,13 @@ impl GovernanceContract {
             return Err(ContractError::InvalidDurationRange);
         }
 
-        let token_client = token::Client::new(&env, &get_voting_token(&env)?);
+        let voting_token = get_voting_token(&env)?;
+        let token_client = token::Client::new(&env, &voting_token);
 
-        // Quorum must not exceed total token supply
-        let supply = TokenSupplyClient::new(&env, &get_voting_token(&env)?).total_supply();
+        // Quorum must not exceed total token supply.
+        // #59: reuse the voting_token address already fetched above to avoid a
+        // duplicate instance-storage read for get_voting_token.
+        let supply = TokenSupplyClient::new(&env, &voting_token).total_supply();
         if quorum > supply {
             return Err(ContractError::QuorumExceedsSupply);
         }
@@ -329,8 +333,12 @@ impl GovernanceContract {
             state: ProposalState::Active,
             execute_after: 0,
             proposal_type,
+            // #56: snapshot supply at proposal creation time so that subsequent
+            // mints/burns do not change the upper bound used in update_quorum.
+            supply_snapshot: supply,
         };
         save_proposal(&env, &proposal);
+        increment_active_proposals(&env);
         set_last_proposal(&env, &proposer, now);
         events::proposal_created(&env, id, &proposer);
         Ok(id)
@@ -577,6 +585,8 @@ impl GovernanceContract {
         }
 
         save_proposal(&env, &proposal);
+        // Proposal is no longer active; decrement the counter so new proposals can be created.
+        decrement_active_proposals(&env);
         events::proposal_finalised(&env, proposal_id, &proposal.state, proposal.execute_after);
         Ok(())
     }
@@ -708,16 +718,28 @@ impl GovernanceContract {
         }
         proposal.state = ProposalState::Cancelled;
         save_proposal(&env, &proposal);
+        decrement_active_proposals(&env);
         events::proposal_cancelled(&env, proposal_id);
         Ok(())
     }
 
     /// Updates the quorum threshold of an active proposal. Only the admin may call this.
     ///
+    /// # Supply-snapshot constraint (#56)
+    ///
+    /// The new quorum is validated against `proposal.supply_snapshot` — the total
+    /// token supply captured when the proposal was **created** — rather than the
+    /// live supply at the time of this call.  This prevents a scenario where tokens
+    /// are burned after the proposal is opened, which would otherwise allow the admin
+    /// to set a quorum that is permanently unachievable (because the live supply has
+    /// shrunk below the requested quorum).  By anchoring validation to the creation-time
+    /// snapshot the upper bound remains stable for the lifetime of the proposal.
+    ///
     /// # Errors
     /// - [`ContractError::InvalidAddress`] if `admin` is the zero address.
     /// - [`ContractError::NotAdmin`] if `admin` does not match the stored admin.
     /// - [`ContractError::InvalidQuorum`] if `new_quorum` is zero or negative.
+    /// - [`ContractError::QuorumExceedsSupply`] if `new_quorum` exceeds `proposal.supply_snapshot`.
     /// - [`ContractError::ProposalNotFound`] if `proposal_id` does not exist.
     /// - [`ContractError::ProposalNotActive`] if the proposal is not in `Active` status.
     pub fn update_quorum(
@@ -742,6 +764,12 @@ impl GovernanceContract {
         let mut proposal = load_proposal(&env, proposal_id)?;
         if proposal.state != ProposalState::Active {
             return Err(ContractError::ProposalNotActive);
+        }
+        // #56: Bound the new quorum by the supply snapshot taken at proposal creation.
+        // This anchors the validation to the supply that was available when voters
+        // committed to this proposal, making quorum achievability deterministic.
+        if new_quorum > proposal.supply_snapshot {
+            return Err(ContractError::QuorumExceedsSupply);
         }
         proposal.quorum = new_quorum;
         save_proposal(&env, &proposal);
@@ -783,6 +811,46 @@ impl GovernanceContract {
     /// Returns the current global cap on active proposals.
     pub fn get_max_active_proposals(env: Env) -> u64 {
         storage::get_max_active_proposals(&env)
+    }
+
+    /// Updates the mandatory timelock delay between a proposal passing and its execution.
+    ///
+    /// The new duration applies **only to proposals created after this call**.  Proposals that
+    /// have already passed retain the `execute_after` timestamp computed at finalisation time.
+    ///
+    /// # Parameters
+    /// - `new_duration`: new timelock in seconds.  Must be in the range `[0, 2_592_000]`
+    ///   (0 = no delay; 2_592_000 = 30 days).
+    ///
+    /// # Errors
+    /// - [`ContractError::InvalidAddress`] if `admin` is the zero address.
+    /// - [`ContractError::NotAdmin`] if `admin` does not match the stored admin.
+    /// - [`ContractError::ContractPaused`] if the contract is paused.
+    /// - [`ContractError::InvalidDurationRange`] if `new_duration` exceeds 30 days.
+    pub fn update_timelock(
+        env: Env,
+        admin: Address,
+        new_duration: u64,
+    ) -> Result<(), ContractError> {
+        // SEC-005: auth first.
+        admin.require_auth();
+        // SEC-004: reject zero address.
+        require_non_zero_address(&env, &admin)?;
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        if get_admin(&env)? != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        // 30 days is the maximum timelock duration (matches max voting duration).
+        const MAX_TIMELOCK: u64 = 2_592_000;
+        if new_duration > MAX_TIMELOCK {
+            return Err(ContractError::InvalidDurationRange);
+        }
+        let old_duration = get_timelock_duration(&env);
+        set_timelock_duration(&env, new_duration);
+        events::timelock_updated(&env, &admin, old_duration, new_duration);
+        Ok(())
     }
 
     /// Transfers admin rights to a new address. Only the current admin may call this.

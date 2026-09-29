@@ -23,7 +23,7 @@ struct Config {
 
 /// Required environment variables that must be set before the indexer starts.
 const REQUIRED_ENV_VARS: &[(&str, &str)] = &[
-    ("DATABASE_URL", "PostgreSQL connection string, e.g. postgres://user:pass@localhost/votechain"),
+    ("DATABASE_URL", "PostgreSQL connection string, e.g. postgres://user@localhost/votechain (supply the password via DATABASE_PASSWORD_FILE)"),
     ("CONTRACT_ID", "Deployed VoteChain governance contract address (C...)"),
 ];
 
@@ -57,14 +57,53 @@ fn validate_env() -> Result<()> {
     Ok(())
 }
 
+/// Validates the format of a PostgreSQL connection string and, if
+/// `password_file` is set, injects the password read from that file.
+///
+/// Error messages never include the URL itself, so credentials cannot leak
+/// into logs.
+fn resolve_database_url(raw: &str, password_file: Option<&str>) -> Result<String> {
+    let mut url = url::Url::parse(raw)
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL is not a valid URL (value redacted)"))?;
+    if !matches!(url.scheme(), "postgres" | "postgresql") {
+        anyhow::bail!("DATABASE_URL must use the postgres:// or postgresql:// scheme");
+    }
+    if url.host_str().map(str::is_empty).unwrap_or(true) {
+        anyhow::bail!("DATABASE_URL must include a host");
+    }
+    if let Some(path) = password_file.filter(|p| !p.is_empty()) {
+        if url.password().is_some() {
+            anyhow::bail!("DATABASE_URL must not embed a password when DATABASE_PASSWORD_FILE is set");
+        }
+        let password = std::fs::read_to_string(path)
+            .context("failed to read DATABASE_PASSWORD_FILE")?;
+        let password = password.trim_end_matches(['\n', '\r']);
+        if password.is_empty() {
+            anyhow::bail!("DATABASE_PASSWORD_FILE is empty");
+        }
+        url.set_password(Some(password))
+            .map_err(|_| anyhow::anyhow!("DATABASE_URL cannot carry a password"))?;
+    }
+    Ok(url.into())
+}
+
 impl Config {
     fn from_env() -> Result<Self> {
         // Validate all required vars first so the operator sees every missing
         // variable in a single error, not one at a time.
         validate_env()?;
 
+        let database_url = resolve_database_url(
+            &env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
+            env::var("DATABASE_PASSWORD_FILE").ok().as_deref(),
+        )?;
+        // Scrub credentials from the process environment so they are not
+        // exposed via /proc/self/environ to anything that inspects it later.
+        env::remove_var("DATABASE_URL");
+        env::remove_var("DATABASE_PASSWORD_FILE");
+
         Ok(Self {
-            database_url: env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
+            database_url,
             horizon_url: env::var("HORIZON_URL")
                 .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".into()),
             contract_id: env::var("CONTRACT_ID").context("CONTRACT_ID must be set")?,
@@ -348,4 +387,188 @@ async fn main() -> Result<()> {
     info!("VoteChain indexer API on {addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
+//
+// These tests spin up a real PostgreSQL instance via `testcontainers` (Docker
+// required) and an in-process mock Horizon server, then drive `poll_once`.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use testcontainers_modules::{
+        postgres::Postgres,
+        testcontainers::{runners::AsyncRunner, ContainerAsync},
+    };
+    use tracing_test::traced_test;
+
+    const CONTRACT: &str = "CTESTCONTRACT";
+
+    struct Harness {
+        _pg: ContainerAsync<Postgres>,
+        pool: PgPool,
+        cfg: Config,
+        page: Arc<Mutex<Value>>,
+        client: Client,
+    }
+
+    async fn harness() -> Harness {
+        let pg = Postgres::default().start().await.expect("start postgres");
+        let port = pg.get_host_port_ipv4(5432).await.expect("pg port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect");
+        sqlx::migrate!("./migrations").run(&pool).await.expect("migrate");
+
+        let page = Arc::new(Mutex::new(events_page(vec![])));
+        let served = page.clone();
+        let app = Router::new().route(
+            "/contracts/{id}/events",
+            get(move || {
+                let served = served.clone();
+                async move { Json(served.lock().unwrap().clone()) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let cfg = Config {
+            database_url: url,
+            horizon_url: format!("http://{addr}"),
+            contract_id: CONTRACT.into(),
+            poll_interval: Duration::from_millis(10),
+            backend_url: None,
+        };
+        Harness { _pg: pg, pool, cfg, page, client: Client::new() }
+    }
+
+    fn event(ledger: u64, tx: &str, topic: &str, proposal: i64) -> Value {
+        serde_json::json!({
+            "ledger": ledger,
+            "transaction_hash": tx,
+            "contract_id": CONTRACT,
+            "topic": [topic, proposal],
+            "value": { "tx": tx },
+        })
+    }
+
+    fn events_page(records: Vec<Value>) -> Value {
+        serde_json::json!({ "_embedded": { "records": records } })
+    }
+
+    impl Harness {
+        fn serve(&self, records: Vec<Value>) {
+            *self.page.lock().unwrap() = events_page(records);
+        }
+
+        async fn poll(&self) -> Result<usize> {
+            poll_once(&self.client, &self.pool, &self.cfg).await
+        }
+
+        async fn rows(&self) -> Vec<(i64, String, String, Option<i64>)> {
+            sqlx::query_as(
+                "SELECT ledger_seq, tx_hash, topic, proposal_id
+                 FROM contract_events ORDER BY ledger_seq, tx_hash",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .unwrap()
+        }
+
+        async fn cursor(&self) -> u64 {
+            last_ledger(&self.pool, CONTRACT).await.unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn ingests_events_from_horizon_into_db() {
+        let h = harness().await;
+        h.serve(vec![
+            event(10, "tx-a", "created", 1),
+            event(11, "tx-b", "vote", 1),
+            event(12, "tx-c", "final", 1),
+        ]);
+
+        assert_eq!(h.poll().await.unwrap(), 3);
+        assert_eq!(
+            h.rows().await,
+            vec![
+                (10, "tx-a".into(), "created".into(), Some(1)),
+                (11, "tx-b".into(), "vote".into(), Some(1)),
+                (12, "tx-c".into(), "final".into(), Some(1)),
+            ]
+        );
+        assert_eq!(h.cursor().await, 12);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn unknown_topic_is_skipped_and_logged() {
+        let h = harness().await;
+        h.serve(vec![
+            event(20, "tx-a", "created", 1),
+            event(21, "tx-b", "mystery", 1),
+        ]);
+
+        assert_eq!(h.poll().await.unwrap(), 1);
+        let rows = h.rows().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2, "created");
+        assert!(logs_contain("unknown event topic"));
+        assert!(logs_contain("mystery"));
+        // Skipped events still advance the cursor past their ledger.
+        assert_eq!(h.cursor().await, 21);
+    }
+
+    #[tokio::test]
+    async fn duplicate_events_are_deduplicated() {
+        let h = harness().await;
+        let batch = vec![event(30, "tx-a", "vote", 2), event(31, "tx-b", "vote", 2)];
+
+        h.serve(batch.clone());
+        h.poll().await.unwrap();
+        // Horizon re-delivers the same events (e.g. cursor overlap on restart).
+        h.serve([batch.clone(), batch].concat());
+        h.poll().await.unwrap();
+
+        assert_eq!(h.rows().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn cursor_does_not_advance_when_batch_fails_midway() {
+        let h = harness().await;
+        sqlx::query(
+            "ALTER TABLE contract_events ADD CONSTRAINT test_reject_poison CHECK (tx_hash <> 'poison')",
+        )
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+        h.serve(vec![
+            event(40, "tx-a", "created", 3),
+            event(41, "poison", "vote", 3),
+            event(42, "tx-c", "final", 3),
+        ]);
+
+        assert!(h.poll().await.is_err());
+        assert_eq!(h.cursor().await, 0, "cursor must not advance on a partial batch");
+        assert!(h.rows().await.iter().all(|r| r.0 < 42), "later events not processed");
+
+        // Once the failure clears, the batch is retried and the cursor advances.
+        sqlx::query("ALTER TABLE contract_events DROP CONSTRAINT test_reject_poison")
+            .execute(&h.pool)
+            .await
+            .unwrap();
+        h.poll().await.unwrap();
+        assert_eq!(h.cursor().await, 42);
+        assert_eq!(h.rows().await.len(), 3);
+    }
 }
