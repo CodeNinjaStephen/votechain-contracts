@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 export const STELLAR_NETWORK: "TESTNET" | "MAINNET" =
@@ -6,6 +6,12 @@ export const STELLAR_NETWORK: "TESTNET" | "MAINNET" =
     ? "MAINNET"
     : "TESTNET";
 const FREIGHTER_DOWNLOAD = "https://www.freighter.app/";
+/** Button stays disabled for this long after every click (debounce). */
+export const CONNECT_DEBOUNCE_MS = 2000;
+/** Consecutive failures before a cooldown is enforced. */
+export const MAX_FAILED_ATTEMPTS = 3;
+/** Cooldown applied after MAX_FAILED_ATTEMPTS consecutive failures. */
+export const COOLDOWN_MS = 30000;
 
 type FreighterApi = {
   isConnected: () => Promise<boolean>;
@@ -33,7 +39,20 @@ export function FreighterWallet() {
   });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [mismatchDismissed, setMismatchDismissed] = useState(false);
+  const [throttled, setThrottled] = useState(false);
+  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
+  const failedAttempts = useRef(0);
+  const inFlight = useRef(false);
+
+  // Clear the cooldown once it expires.
+  useEffect(() => {
+    if (cooldownUntil === null) return;
+    const id = setTimeout(() => {
+      setCooldownUntil(null);
+      failedAttempts.current = 0;
+    }, Math.max(0, cooldownUntil - Date.now()));
+    return () => clearTimeout(id);
+  }, [cooldownUntil]);
 
   // Check if already connected on mount
   useEffect(() => {
@@ -52,11 +71,18 @@ export function FreighterWallet() {
   }, []);
 
   async function connect() {
+    // Rate limiting: ignore clicks while a request is in flight, during the
+    // debounce window, or during a failure cooldown. Never retried automatically.
+    if (inFlight.current || throttled || cooldownUntil !== null) return;
+    setThrottled(true);
+    setTimeout(() => setThrottled(false), CONNECT_DEBOUNCE_MS);
+
     const freighter = (window as unknown as Record<string, unknown>).freighter as FreighterApi | undefined;
     if (!freighter) {
       setError(t("wallet.notFound"));
       return;
     }
+    inFlight.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -64,11 +90,15 @@ export function FreighterWallet() {
       const address: string = await freighter.getPublicKey();
       const network: string = await freighter.getNetwork();
       setWallet({ address, network, connected: true });
-      // Re-show the mismatch warning on every (re)connect
-      setMismatchDismissed(false);
+      failedAttempts.current = 0;
     } catch (e: unknown) {
       setError((e as { message?: string })?.message ?? t("wallet.failed"));
+      failedAttempts.current += 1;
+      if (failedAttempts.current >= MAX_FAILED_ATTEMPTS) {
+        setCooldownUntil(Date.now() + COOLDOWN_MS);
+      }
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }
@@ -86,7 +116,12 @@ export function FreighterWallet() {
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
       {!wallet.connected ? (
-        <button onClick={connect} disabled={loading} aria-label={t("wallet.connectLabel")}>
+        <button
+          onClick={connect}
+          disabled={loading || throttled || cooldownUntil !== null}
+          aria-busy={loading}
+          aria-label={t("wallet.connectLabel")}
+        >
           {loading ? t("wallet.connecting") : t("wallet.connect")}
         </button>
       ) : (
@@ -117,6 +152,12 @@ export function FreighterWallet() {
           <button onClick={() => setMismatchDismissed(true)} aria-label={t("wallet.dismissWarning")}>
             ×
           </button>
+        </span>
+      )}
+
+      {cooldownUntil !== null && (
+        <span role="status" style={{ color: "orange" }}>
+          {t("wallet.cooldown", { seconds: Math.ceil(COOLDOWN_MS / 1000) })}
         </span>
       )}
 

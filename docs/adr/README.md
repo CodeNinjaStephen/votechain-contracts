@@ -10,5 +10,8 @@ This directory contains ADRs for VoteChain — records of significant architectu
 | [ADR-004](ADR-004-three-way-vote.md) | Three-way vote: Yes / No / Abstain | Accepted |
 | [ADR-005](ADR-005-on-chain-events.md) | Emit on-chain events for all state transitions | Accepted |
 | [ADR-006](ADR-006-instance-vs-persistent-storage.md) | Instance vs persistent storage tier assignment | Accepted |
+| [ADR-010](ADR-010-frontend-framework-vite-react.md) | Frontend framework: Vite + React + TypeScript | Accepted |
+| [ADR-011](ADR-011-no-state-management-library.md) | No dedicated state management library (Context API) | Accepted |
+| [ADR-012](ADR-012-freighter-sole-wallet.md) | Freighter as the sole wallet integration target | Accepted |
 
 To create a new ADR, copy [TEMPLATE.md](TEMPLATE.md), number it sequentially, and open a PR.

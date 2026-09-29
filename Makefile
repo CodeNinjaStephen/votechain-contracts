@@ -1,4 +1,6 @@
-.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz help
+.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz load-test help
+
+LOAD_TEST_URL ?= http://localhost:4000
 
 STELLAR_CLI_VERSION := 22.8.2
 
@@ -18,6 +20,11 @@ fuzz:
 	@timeout 60 cargo +nightly fuzz run fuzz_cast_vote || true
 	@timeout 60 cargo +nightly fuzz run fuzz_finalise || true
 	@echo "Fuzz testing completed. Check for any panics or crashes above."
+
+## load-test: Run k6 load test against the indexer API (LOAD_TEST_URL, default http://localhost:4000)
+load-test:
+	@command -v k6 >/dev/null 2>&1 || (echo "ERROR: k6 not found. See https://k6.io/docs/get-started/installation/" && exit 1)
+	k6 run -e BASE_URL=$(LOAD_TEST_URL) tests/load/events.js
 
 ## fmt: Auto-format all source files
 fmt:

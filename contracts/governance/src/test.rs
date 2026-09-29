@@ -547,6 +547,56 @@ fn test_update_quorum_inactive_proposal_reverts() {
     t.client.update_quorum(&t.admin, &id, &500);
 }
 
+/// Issue #56 — update_quorum is bounded by the supply snapshot taken at
+/// proposal creation time, not the live supply at the time of the call.
+///
+/// Scenario: create a proposal against a supply of 10,000,000 tokens, then
+/// burn a large chunk of supply so the live supply drops below the proposed
+/// new quorum.  update_quorum must still succeed because the snapshot was
+/// taken before the burn and remains the upper bound.
+#[test]
+fn test_update_quorum_uses_supply_snapshot_not_live_supply() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+
+    // Initial supply = 10_000_000 (set up by setup_env / token initialize).
+    // create a proposal with quorum = 1_000 (well within supply).
+    let id = create_test_proposal(&t, &proposer);
+
+    // Verify snapshot was captured at creation.
+    let proposal_before = t.client.get_proposal(&id);
+    assert!(
+        proposal_before.supply_snapshot > 0,
+        "supply_snapshot must be positive after creation"
+    );
+
+    // Burn most of the supply so live supply is now much smaller.
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    // Burn 9_900_000 tokens from admin (leaves 100_000 live).
+    tok.burn(&t.admin, &t.admin, &9_900_000_i128);
+
+    // update_quorum to 5_000_000 — this exceeds the current live supply
+    // (100_000) but is within the snapshot (10_000_000).
+    // The call must SUCCEED because the snapshot anchors validation.
+    t.client.update_quorum(&t.admin, &id, &5_000_000);
+    let proposal_after = t.client.get_proposal(&id);
+    assert_eq!(proposal_after.quorum, 5_000_000, "quorum should be updated to 5_000_000");
+}
+
+/// Issue #56 — update_quorum must REJECT a new quorum that exceeds the
+/// supply_snapshot, regardless of whether live supply has changed.
+#[test]
+#[should_panic(expected = "Error(Contract, #22)")]
+fn test_update_quorum_exceeding_snapshot_reverts() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let id = create_test_proposal(&t, &proposer);
+
+    // Attempt to set quorum above the snapshot (10_000_000 + 1).
+    // This must revert with QuorumExceedsSupply (error #22).
+    t.client.update_quorum(&t.admin, &id, &10_000_001);
+}
+
 // ── end SC-027 ────────────────────────────────────────────────────────────────
 
 // ── storage persistence tests ─────────────────────────────────────────────────
@@ -3863,3 +3913,101 @@ fn test_multi_asset_voting_parameter_change_interaction() {
 }
 
 // ── end Issue #119 ─────────────────────────────────────────────────────────────
+
+// ── Issue #61: get_votes batch function tests ──────────────────────────────────
+
+/// Empty batch returns an empty Vec without error.
+#[test]
+fn test_get_votes_empty_batch() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
+
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    let results = t.client.get_votes(&id, &empty).unwrap();
+    assert_eq!(results.len(), 0);
+}
+
+/// Single voter — voted address returns Some, non-voter returns None.
+#[test]
+fn test_get_votes_single_voter() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let voter = Address::generate(&t.env);
+    let non_voter = Address::generate(&t.env);
+
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    tok.mint(&t.admin, &voter, &200);
+
+    let id = create_test_proposal(&t, &proposer);
+    t.client.cast_vote(&voter, &id, &Vote::Yes);
+
+    let mut voters = soroban_sdk::Vec::new(&t.env);
+    voters.push_back(voter.clone());
+    voters.push_back(non_voter.clone());
+
+    let results = t.client.get_votes(&id, &voters).unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().is_some());
+    assert!(results.get(1).unwrap().is_none());
+}
+
+/// Full batch of 50 voters all returns correctly.
+#[test]
+fn test_get_votes_batch_of_50() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
+
+    let mut voters: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..50u32 {
+        let v = Address::generate(&t.env);
+        tok.mint(&t.admin, &v, &100);
+        t.client.cast_vote(&v, &id, &Vote::Yes);
+        voters.push_back(v);
+    }
+
+    let results = t.client.get_votes(&id, &voters).unwrap();
+    assert_eq!(results.len(), 50);
+    for i in 0..50u32 {
+        assert!(results.get(i).unwrap().is_some());
+    }
+}
+
+/// Batch of 51 voters fails with BatchTooLarge.
+#[test]
+fn test_get_votes_batch_of_51_fails() {
+    use crate::types::ContractError;
+
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
+
+    let mut voters: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..51u32 {
+        voters.push_back(Address::generate(&t.env));
+    }
+
+    let err = t.client.try_get_votes(&id, &voters).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::BatchTooLarge);
+}
+
+/// Non-existent proposal fails fast with ProposalNotFound.
+#[test]
+fn test_get_votes_proposal_not_found() {
+    use crate::types::ContractError;
+
+    let t = setup_env();
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    let err = t.client.try_get_votes(&9999, &empty).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::ProposalNotFound);
+}
+
+// ── end Issue #61 ──────────────────────────────────────────────────────────────

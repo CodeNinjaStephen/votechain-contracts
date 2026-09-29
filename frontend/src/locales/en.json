@@ -41,9 +41,7 @@
     "failed": "Failed to connect wallet.",
     "install": "Install Freighter",
     "networkMismatch": "Network mismatch: connected to {{network}}, expected {{expected}}",
-    "networkMismatchMainnet": "Network mismatch — WARNING: this app targets MAINNET but your wallet is on {{network}}. Switch Freighter to Mainnet before voting.",
-    "networkMismatchTestnet": "Network mismatch: your wallet is on {{network}} but this app targets TESTNET. Switch to Testnet to avoid real mainnet fees.",
-    "dismissWarning": "Dismiss network warning"
+    "cooldown": "Too many failed connection attempts. Please wait {{seconds}} seconds before trying again."
   },
   "transaction": {
     "pending": "Transaction pending...",
