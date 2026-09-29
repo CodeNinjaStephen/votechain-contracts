@@ -8,9 +8,17 @@ services:
     environment:
       - NETWORK=local
     depends_on:
-      - stellar-node
+      stellar-node:
+        condition: service_healthy
     stdin_open: true
     tty: true
+    healthcheck:
+      # The dev container is "healthy" as soon as the Rust toolchain is available.
+      test: ["CMD", "rustc", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   backend:
     build: ./backend
@@ -20,17 +28,25 @@ services:
       - PORT=3001
       - REDIS_URL=redis://redis:6379
     depends_on:
-      - redis
+      redis:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   stellar-node:
     image: stellar/quickstart:latest
@@ -39,6 +55,13 @@ services:
     environment:
       - ENABLE_SOROBAN_RPC=true
     command: --local
+    healthcheck:
+      # Wait until the Soroban RPC endpoint responds to HTTP requests.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
 volumes:
   cargo-cache:

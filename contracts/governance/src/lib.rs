@@ -27,10 +27,10 @@ pub mod test_helpers;
 #[cfg(test)]
 mod test_delegation;
 #[cfg(test)]
-mod test_concurrency;
+mod test_event_snapshots;
 
 use soroban_sdk::{contract, contractclient, contractimpl, token, Address, Env, String, Vec};
-use types::{ConfigKey, ContractError, ContractState, ProposalState, ProposalType, Proposal, Vote, VoteRecord};
+use types::{ConfigKey, ContractConfig, ContractError, ContractState, ProposalState, ProposalType, Proposal, Vote, VoteRecord};
 use storage::{
     clear_delegation, clear_pending_admin, get_admin, get_admin_transfer_expiry,
     get_contract_state, get_delegation, get_last_proposal, get_max_duration, get_min_duration,
@@ -46,6 +46,15 @@ use storage::{
 
 const MAX_TITLE_LEN: u32 = 128;
 const MAX_DESC_LEN: u32 = 1024;
+// Maximum number of voters allowed in a single get_votes batch call.
+const MAX_BATCH_VOTERS: u32 = 50;
+
+/// Minimum admin transfer window in seconds (5 minutes).
+///
+/// Stellar ledger timestamps can drift by up to ±12 seconds.  An acceptance
+/// window shorter than this constant could expire unexpectedly due to clock
+/// skew.  Enforced by [`GovernanceContract::propose_admin_transfer`].
+const MIN_TRANSFER_WINDOW: u64 = 300;
 
 // SEC-004: Stellar null/zero address used as the sentinel for invalid inputs.
 const ZERO_ADDRESS: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -488,6 +497,44 @@ impl GovernanceContract {
         get_vote_record(&env, proposal_id, &voter)
     }
 
+    /// Returns vote records for a batch of voters on a single proposal.
+    ///
+    /// Designed for indexers that need to retrieve many vote records in one
+    /// RPC call rather than issuing one call per voter.
+    ///
+    /// # Parameters
+    /// - `proposal_id` — the proposal to query; must exist.
+    /// - `voters` — list of addresses to look up; capped at [`MAX_BATCH_VOTERS`] (50).
+    ///
+    /// # Returns
+    /// A `Vec<Option<VoteRecord>>` parallel to `voters`:
+    /// - `Some(record)` if the address has voted on this proposal.
+    /// - `None` if the address has not voted (no error is returned for non-voters).
+    ///
+    /// # Errors
+    /// - [`ContractError::ProposalNotFound`] if `proposal_id` does not exist.
+    /// - [`ContractError::BatchTooLarge`] if `voters.len() > MAX_BATCH_VOTERS` (50).
+    pub fn get_votes(
+        env: Env,
+        proposal_id: u64,
+        voters: Vec<Address>,
+    ) -> Result<Vec<Option<VoteRecord>>, ContractError> {
+        // Fail fast: verify the proposal exists before any storage reads.
+        load_proposal(&env, proposal_id)?;
+
+        // Enforce the batch size cap to bound per-call gas consumption.
+        if voters.len() > MAX_BATCH_VOTERS {
+            return Err(ContractError::BatchTooLarge);
+        }
+
+        let mut results: Vec<Option<VoteRecord>> = Vec::new(&env);
+        for voter in voters.iter() {
+            results.push_back(get_vote_record(&env, proposal_id, &voter));
+        }
+        Ok(results)
+    }
+
+
     /// Finalises a proposal after its voting period has ended.
     ///
     /// Computes the outcome using the following rules:
@@ -772,10 +819,15 @@ impl GovernanceContract {
     /// (default 48 h when 0).  The admin key is NOT transferred until the nominee
     /// calls [`accept_admin_transfer`] within the window.
     ///
+    /// The window must be at least [`MIN_TRANSFER_WINDOW`] seconds (300 s / 5 min)
+    /// to absorb Stellar ledger-timestamp drift of up to ±12 seconds.
+    ///
     /// # Errors
     /// - [`ContractError::InvalidAddress`] if either address is the zero address.
     /// - [`ContractError::NotAdmin`] if `admin` does not match the stored admin.
     /// - [`ContractError::ContractPaused`] if the contract is paused.
+    /// - [`ContractError::TransferWindowTooShort`] if `window_secs` is non-zero and
+    ///   less than [`MIN_TRANSFER_WINDOW`] (300 seconds).
     pub fn propose_admin_transfer(
         env: Env,
         admin: Address,
@@ -790,6 +842,12 @@ impl GovernanceContract {
         }
         if get_admin(&env)? != admin {
             return Err(ContractError::NotAdmin);
+        }
+        // Enforce minimum transfer window to absorb ledger-timestamp clock drift.
+        // window_secs == 0 uses the default (172_800 s = 48 h), which is well above
+        // the minimum, so we only validate non-zero explicit values.
+        if window_secs != 0 && window_secs < MIN_TRANSFER_WINDOW {
+            return Err(ContractError::TransferWindowTooShort);
         }
         let window = if window_secs == 0 {
             172_800
@@ -907,6 +965,40 @@ impl GovernanceContract {
     /// Returns the contract version as a `(major, minor, patch)` semver tuple.
     pub fn get_version(env: Env) -> (u32, u32, u32) {
         get_version(&env)
+    }
+
+    /// Returns a snapshot of all governance configuration values in a single call.
+    ///
+    /// Off-chain indexers and frontends can call this once instead of making
+    /// separate RPC calls for each config field, reducing RPC overhead significantly.
+    ///
+    /// # Returns
+    /// A [`ContractConfig`] struct containing:
+    /// - `admin` – current admin address
+    /// - `voting_token` – governance token contract address
+    /// - `min_proposal_balance` – minimum balance to create proposals
+    /// - `proposal_cooldown` – seconds between proposals per proposer
+    /// - `restrict_admin_vote` – whether admin is blocked from voting own proposals
+    /// - `paused` – current pause state
+    /// - `timelock_duration` – mandatory delay after proposal passes
+    /// - `min_duration` – minimum voting duration in seconds
+    /// - `max_duration` – maximum voting duration in seconds
+    /// - `version` – semver tuple `(major, minor, patch)`
+    ///
+    /// This function is read-only and makes no state changes.
+    pub fn get_config(env: Env) -> Result<ContractConfig, ContractError> {
+        Ok(ContractConfig {
+            admin: get_admin(&env)?,
+            voting_token: get_voting_token(&env)?,
+            min_proposal_balance: get_min_proposal_balance(&env),
+            proposal_cooldown: get_proposal_cooldown(&env),
+            restrict_admin_vote: get_restrict_admin_vote(&env),
+            paused: is_paused(&env),
+            timelock_duration: get_timelock_duration(&env),
+            min_duration: get_min_duration(&env),
+            max_duration: get_max_duration(&env),
+            version: get_version(&env),
+        })
     }
 
     /// Returns the contract lifecycle state.

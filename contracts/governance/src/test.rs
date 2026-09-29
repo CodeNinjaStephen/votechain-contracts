@@ -3863,3 +3863,101 @@ fn test_multi_asset_voting_parameter_change_interaction() {
 }
 
 // ── end Issue #119 ─────────────────────────────────────────────────────────────
+
+// ── Issue #61: get_votes batch function tests ──────────────────────────────────
+
+/// Empty batch returns an empty Vec without error.
+#[test]
+fn test_get_votes_empty_batch() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
+
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    let results = t.client.get_votes(&id, &empty).unwrap();
+    assert_eq!(results.len(), 0);
+}
+
+/// Single voter — voted address returns Some, non-voter returns None.
+#[test]
+fn test_get_votes_single_voter() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let voter = Address::generate(&t.env);
+    let non_voter = Address::generate(&t.env);
+
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    tok.mint(&t.admin, &voter, &200);
+
+    let id = create_test_proposal(&t, &proposer);
+    t.client.cast_vote(&voter, &id, &Vote::Yes);
+
+    let mut voters = soroban_sdk::Vec::new(&t.env);
+    voters.push_back(voter.clone());
+    voters.push_back(non_voter.clone());
+
+    let results = t.client.get_votes(&id, &voters).unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().is_some());
+    assert!(results.get(1).unwrap().is_none());
+}
+
+/// Full batch of 50 voters all returns correctly.
+#[test]
+fn test_get_votes_batch_of_50() {
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
+
+    let mut voters: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..50u32 {
+        let v = Address::generate(&t.env);
+        tok.mint(&t.admin, &v, &100);
+        t.client.cast_vote(&v, &id, &Vote::Yes);
+        voters.push_back(v);
+    }
+
+    let results = t.client.get_votes(&id, &voters).unwrap();
+    assert_eq!(results.len(), 50);
+    for i in 0..50u32 {
+        assert!(results.get(i).unwrap().is_some());
+    }
+}
+
+/// Batch of 51 voters fails with BatchTooLarge.
+#[test]
+fn test_get_votes_batch_of_51_fails() {
+    use crate::types::ContractError;
+
+    let t = setup_env();
+    let proposer = Address::generate(&t.env);
+    let tok = votechain_token::TokenContractClient::new(&t.env, &t.token_id);
+    tok.mint(&t.admin, &proposer, &500);
+    let id = create_test_proposal(&t, &proposer);
+
+    let mut voters: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..51u32 {
+        voters.push_back(Address::generate(&t.env));
+    }
+
+    let err = t.client.try_get_votes(&id, &voters).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::BatchTooLarge);
+}
+
+/// Non-existent proposal fails fast with ProposalNotFound.
+#[test]
+fn test_get_votes_proposal_not_found() {
+    use crate::types::ContractError;
+
+    let t = setup_env();
+    let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&t.env);
+    let err = t.client.try_get_votes(&9999, &empty).unwrap_err().unwrap();
+    assert_eq!(err, ContractError::ProposalNotFound);
+}
+
+// ── end Issue #61 ──────────────────────────────────────────────────────────────
