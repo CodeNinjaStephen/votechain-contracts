@@ -2,6 +2,17 @@
 
 Welcome to VoteChain! This guide will help you set up your development environment and make your first contribution.
 
+## Video Walkthrough
+
+Prefer to learn by watching?  The **[Video Walkthrough for First-Time Contributors](video-walkthrough.md)** is a ~10-minute screen-recording that covers the complete setup and contribution workflow — clone, install dependencies, run tests, make a small change, and run tests again.
+
+A full written transcript is available in the same document for accessibility.
+
+> **Video status:** 🎬 Pending recording — the transcript and placeholder are
+> ready; the video link will be updated once it is uploaded.
+
+---
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed on your system:
