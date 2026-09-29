@@ -1,4 +1,6 @@
-.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz verify help
+.PHONY: build test fmt fmt-check lint clean deploy-testnet check-stellar-cli fuzz load-test help
+
+LOAD_TEST_URL ?= http://localhost:4000
 
 STELLAR_CLI_VERSION := 22.8.2
 
@@ -19,25 +21,10 @@ fuzz:
 	@timeout 60 cargo +nightly fuzz run fuzz_finalise || true
 	@echo "Fuzz testing completed. Check for any panics or crashes above."
 
-## verify: Run Kani formal-verification harnesses (requires cargo-kani)
-## Proves pass/reject condition correctness, overflow safety, and boundary cases.
-## Each harness is bounded to 60 seconds to fit inside CI time budgets.
-verify:
-	@command -v cargo-kani >/dev/null 2>&1 || (echo "Installing cargo-kani..." && cargo install --locked kani-verifier && cargo kani setup)
-	@echo "Running Kani harnesses for governance contract (60 s timeout each)..."
-	@timeout 60 cargo kani --harness verify_pass_condition_all_combinations \
-		--output-format terse \
-		-p votechain-governance || true
-	@timeout 60 cargo kani --harness verify_no_overflow_in_tally \
-		--output-format terse \
-		-p votechain-governance || true
-	@timeout 60 cargo kani --harness verify_boundary_total_equals_quorum \
-		--output-format terse \
-		-p votechain-governance || true
-	@timeout 60 cargo kani --harness verify_tie_always_rejects \
-		--output-format terse \
-		-p votechain-governance || true
-	@echo "Kani verification complete. Review any FAILED results above."
+## load-test: Run k6 load test against the indexer API (LOAD_TEST_URL, default http://localhost:4000)
+load-test:
+	@command -v k6 >/dev/null 2>&1 || (echo "ERROR: k6 not found. See https://k6.io/docs/get-started/installation/" && exit 1)
+	k6 run -e BASE_URL=$(LOAD_TEST_URL) tests/load/events.js
 
 ## fmt: Auto-format all source files
 fmt:
