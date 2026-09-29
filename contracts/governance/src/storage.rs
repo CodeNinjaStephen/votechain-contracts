@@ -41,6 +41,35 @@ use crate::types::{ContractError, ContractState, DataKey, PendingMultisigAction,
 use soroban_sdk::{Address, Env, Vec};
 
 // =============================================================================
+// TTL Constants (Issue #43)
+// =============================================================================
+//
+// Soroban persistent storage entries expire after ~30 days (~2,592,000 ledgers
+// at ~1 ledger/second) if not bumped.  Long-lived proposals (up to 30-day voting
+// windows) risk having their storage entries expire mid-vote.
+//
+// These constants match Stellar's ledger TTL settings:
+//
+//   LEDGER_PER_SECOND ≈ 1  →  1 ledger ≈ 1 second
+//   PERSISTENT_ENTRY_EXPIRATION_BUMP ≈ the current Stellar network setting of
+//   ~3,110,400 ledgers (≈ 36 days).
+//
+// We store durations in ledgers (≈ seconds):
+//   MIN_TTL  — minimum number of ledgers the entry must still have remaining
+//              before we skip the bump.  Set to 30 days so bumps only fire
+//              when less than 30 days remain.
+//   MAX_TTL  — target TTL to extend to.  Set to 36 days to match the Stellar
+//              network persistent-entry bump amount.
+//
+// References:
+//   https://developers.stellar.org/docs/learn/soroban/storage/state-expiration
+//   CAP-0046: State Expiration
+/// Minimum ledger TTL before a bump is applied (30 days in ledgers ≈ seconds).
+pub const TTL_MIN_LEDGERS: u32 = 2_592_000;
+/// Target TTL after a bump (36 days in ledgers ≈ seconds).
+pub const TTL_MAX_LEDGERS: u32 = 3_110_400;
+
+// =============================================================================
 // Storage Strategy
 // =============================================================================
 //
@@ -77,19 +106,35 @@ use soroban_sdk::{Address, Env, Vec};
 // =============================================================================
 
 /// Persists a proposal to contract storage, keyed by its ID.
+///
+/// Also bumps the persistent-storage TTL so the entry survives long voting periods
+/// (up to 30 days) without expiring.  See `TTL_MIN_LEDGERS` / `TTL_MAX_LEDGERS`.
 pub fn save_proposal(env: &Env, p: &Proposal) {
-    env.storage().persistent().set(&DataKey::Proposal(p.id), p);
+    let key = DataKey::Proposal(p.id);
+    env.storage().persistent().set(&key, p);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_MIN_LEDGERS, TTL_MAX_LEDGERS);
 }
 
 /// Loads a proposal from storage by ID.
 ///
+/// Bumps the persistent-storage TTL on every successful read so the entry is not
+/// silently evicted while a proposal is still being voted on.
+///
 /// # Errors
 /// - [`ContractError::ProposalNotFound`] if no proposal exists for `id`.
 pub fn load_proposal(env: &Env, id: u64) -> Result<Proposal, ContractError> {
+    let key = DataKey::Proposal(id);
+    let proposal = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(ContractError::ProposalNotFound)?;
     env.storage()
         .persistent()
-        .get(&DataKey::Proposal(id))
-        .ok_or(ContractError::ProposalNotFound)
+        .extend_ttl(&key, TTL_MIN_LEDGERS, TTL_MAX_LEDGERS);
+    Ok(proposal)
 }
 
 /// Increments the proposal counter and returns the new ID.

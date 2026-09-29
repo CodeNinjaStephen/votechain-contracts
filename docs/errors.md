@@ -20,6 +20,8 @@ All `ContractError` codes returned by VoteChain smart contracts as `u32` values.
 | 10 | `AlreadyVoted` | The voter address has already cast a vote on this proposal. | Each address may vote exactly once. Use `has_voted(proposal_id, voter)` to check before calling `cast_vote`. |
 | 11 | `NoVotingPower` | The voter holds zero governance tokens at the time of voting. | Acquire a non-zero balance of the governance token before casting a vote. |
 | 12 | `ProposalNotPassed` | `execute` was called on a proposal that did not reach `Passed` status. | Confirm the proposal status is `Passed` with `get_proposal(proposal_id)` before calling `execute`. |
+| 21 | `InvalidDurationRange` | A duration parameter is outside the allowed range. | For `create_proposal`, the `duration` must be within `[min_duration, max_duration]` as configured at init. For `update_timelock`, `new_duration` must not exceed 2,592,000 seconds (30 days). |
+| 30 | `TimelockNotExpired` | `execute` was called before the proposal's `execute_after` timestamp has been reached. | Wait until `env.ledger().timestamp() >= proposal.execute_after`, then retry. Use `get_proposal(proposal_id).execute_after` to check the earliest eligible execution time. |
 
 ---
 
