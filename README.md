@@ -319,6 +319,8 @@ votechain-contracts/
 
 The governance contract manages the complete proposal lifecycle: creation, voting, finalization, execution, and cancellation. It enforces quorum thresholds, prevents double-voting, and maintains an immutable audit trail of all decisions.
 
+> Every function below can return a `ContractError`. See [`docs/errors.md`](docs/errors.md#governance-contract) for the full list of error codes, the function(s) that raise each one, and how to resolve them.
+
 ### Initialization
 
 ```rust
@@ -660,6 +662,8 @@ pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError>
 ### Overview
 
 The token contract implements a SEP-41-compatible governance token with standard ERC-20-style operations: balances, transfers, mint, burn, and spending allowances.
+
+> Every function below can return a `ContractError`. See [`docs/errors.md`](docs/errors.md#token-contract) for the full list of error codes, the function(s) that raise each one, and how to resolve them.
 
 ### Initialization
 

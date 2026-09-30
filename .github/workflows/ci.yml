@@ -31,6 +31,14 @@ jobs:
           fi
           echo "All .rs, .ts, .tsx and .sh files have the license header."
 
+  errors-doc-check:
+    name: Error Reference Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify docs/errors.md documents every ContractError variant
+        run: bash scripts/check-errors-doc.sh
+
   secret-scan:
     name: Secret Scanning (gitleaks)
     runs-on: ubuntu-latest
