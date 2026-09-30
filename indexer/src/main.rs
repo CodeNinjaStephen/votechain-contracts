@@ -16,6 +16,7 @@ use tracing::{error, info, warn};
 struct Config {
     database_url: String,
     horizon_url: String,
+    allowed_horizon_domains: Vec<String>,
     contract_id: String,
     poll_interval: Duration,
     backend_url: Option<String>,
@@ -87,6 +88,106 @@ fn resolve_database_url(raw: &str, password_file: Option<&str>) -> Result<String
     Ok(url.into())
 }
 
+/// Default allowed Horizon domains used when ALLOWED_HORIZON_DOMAINS is unset.
+const DEFAULT_ALLOWED_HORIZON_DOMAINS: &str =
+    "horizon-testnet.stellar.org,horizon.stellar.org";
+
+/// Validates a Horizon URL for SSRF safety.
+///
+/// Checks performed (in order):
+/// 1. The URL must parse successfully.
+/// 2. The scheme must be `https`.
+/// 3. The hostname must appear in the `allowed_domains` allowlist.
+/// 4. If the hostname is a literal IP address it is checked against blocked
+///    private/loopback ranges (RFC 1918, RFC 4193, link-local, loopback).
+///    DNS-resolved IPs are **not** checked at startup (see documentation
+///    limitation note in `.env.example`).
+///
+/// # Errors
+/// Returns a descriptive error for each validation failure so the operator
+/// can fix the misconfiguration immediately.
+fn validate_horizon_url(raw: &str, allowed_domains: &[String]) -> Result<()> {
+    let parsed = url::Url::parse(raw)
+        .map_err(|_| anyhow::anyhow!("HORIZON_URL is not a valid URL"))?;
+
+    // 1. Require HTTPS.
+    if parsed.scheme() != "https" {
+        anyhow::bail!(
+            "HORIZON_URL must use the https:// scheme (got '{}://'). \
+             Plain HTTP is not permitted in production.",
+            parsed.scheme()
+        );
+    }
+
+    // 2. Extract the hostname.
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("HORIZON_URL must include a host"))?;
+
+    // 3. Check domain allowlist (case-insensitive, strip optional trailing dot).
+    let host_normalised = host.trim_end_matches('.').to_ascii_lowercase();
+    let allowed = allowed_domains
+        .iter()
+        .any(|d| d.trim().to_ascii_lowercase() == host_normalised);
+    if !allowed {
+        anyhow::bail!(
+            "HORIZON_URL host '{}' is not in the allowed domains list. \
+             Permitted hosts: {}. \
+             Override via ALLOWED_HORIZON_DOMAINS (comma-separated).",
+            host,
+            allowed_domains.join(", ")
+        );
+    }
+
+    // 4. Block literal private / loopback IP addresses.
+    //    We use the `url` crate's host parsing to detect IPv4/IPv6 literals.
+    use url::Host;
+    match parsed.host() {
+        Some(Host::Ipv4(ip)) => {
+            let octets = ip.octets();
+            let is_private = matches!(octets,
+                // 10.0.0.0/8
+                [10, ..] |
+                // 172.16.0.0/12  (172.16.x.x – 172.31.x.x)
+                [172, 16..=31, ..] |
+                // 192.168.0.0/16
+                [192, 168, ..] |
+                // 127.0.0.0/8 loopback
+                [127, ..] |
+                // 169.254.0.0/16 link-local
+                [169, 254, ..]
+            );
+            if is_private {
+                anyhow::bail!(
+                    "HORIZON_URL resolves to a private/loopback IPv4 address ({}). \
+                     Connection to private IP ranges is blocked to prevent SSRF.",
+                    ip
+                );
+            }
+        }
+        Some(Host::Ipv6(ip)) => {
+            let segments = ip.segments();
+            // ::1 loopback
+            let is_loopback = ip.is_loopback();
+            // fc00::/7 unique local (fc00:: – fdff::)
+            let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
+            // fe80::/10 link-local
+            let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
+            if is_loopback || is_unique_local || is_link_local {
+                anyhow::bail!(
+                    "HORIZON_URL resolves to a private/loopback IPv6 address ({}). \
+                     Connection to private IP ranges is blocked to prevent SSRF.",
+                    ip
+                );
+            }
+        }
+        _ => {} // Hostname — DNS resolution not validated at startup (see docs limitation)
+    }
+
+    Ok(())
+}
+
 impl Config {
     fn from_env() -> Result<Self> {
         // Validate all required vars first so the operator sees every missing
@@ -102,10 +203,21 @@ impl Config {
         env::remove_var("DATABASE_URL");
         env::remove_var("DATABASE_PASSWORD_FILE");
 
+        let allowed_horizon_domains: Vec<String> = env::var("ALLOWED_HORIZON_DOMAINS")
+            .unwrap_or_else(|_| DEFAULT_ALLOWED_HORIZON_DOMAINS.into())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let horizon_url = env::var("HORIZON_URL")
+            .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".into());
+        validate_horizon_url(&horizon_url, &allowed_horizon_domains)?;
+
         Ok(Self {
             database_url,
-            horizon_url: env::var("HORIZON_URL")
-                .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".into()),
+            horizon_url,
+            allowed_horizon_domains,
             contract_id: env::var("CONTRACT_ID").context("CONTRACT_ID must be set")?,
             poll_interval: Duration::from_secs(
                 env::var("POLL_INTERVAL_SECS")
@@ -443,6 +555,7 @@ mod tests {
         let cfg = Config {
             database_url: url,
             horizon_url: format!("http://{addr}"),
+            allowed_horizon_domains: vec![],
             contract_id: CONTRACT.into(),
             poll_interval: Duration::from_millis(10),
             backend_url: None,
@@ -570,5 +683,223 @@ mod tests {
         h.poll().await.unwrap();
         assert_eq!(h.cursor().await, 42);
         assert_eq!(h.rows().await.len(), 3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for validate_horizon_url (no Docker / async required)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod ssrf_tests {
+    use super::validate_horizon_url;
+
+    fn domains(list: &str) -> Vec<String> {
+        list.split(',').map(|s| s.trim().to_string()).collect()
+    }
+
+    fn default_domains() -> Vec<String> {
+        domains("horizon-testnet.stellar.org,horizon.stellar.org")
+    }
+
+    // ---- scheme checks ----
+
+    #[test]
+    fn rejects_http_scheme() {
+        let err = validate_horizon_url(
+            "http://horizon-testnet.stellar.org",
+            &default_domains(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("https://"),
+            "error should mention https: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_ftp_scheme() {
+        let err = validate_horizon_url(
+            "ftp://horizon-testnet.stellar.org",
+            &default_domains(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("https://"));
+    }
+
+    #[test]
+    fn accepts_https_default_testnet() {
+        validate_horizon_url(
+            "https://horizon-testnet.stellar.org",
+            &default_domains(),
+        )
+        .expect("valid testnet URL should be accepted");
+    }
+
+    #[test]
+    fn accepts_https_default_mainnet() {
+        validate_horizon_url(
+            "https://horizon.stellar.org",
+            &default_domains(),
+        )
+        .expect("valid mainnet URL should be accepted");
+    }
+
+    // ---- allowlist checks ----
+
+    #[test]
+    fn rejects_domain_not_in_allowlist() {
+        let err = validate_horizon_url(
+            "https://evil.example.com",
+            &default_domains(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("not in the allowed domains list"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_custom_allowlist_domain() {
+        validate_horizon_url(
+            "https://my-horizon.internal.corp",
+            &domains("my-horizon.internal.corp"),
+        )
+        .expect("custom allowlist domain should be accepted");
+    }
+
+    #[test]
+    fn allowlist_check_is_case_insensitive() {
+        validate_horizon_url(
+            "https://HORIZON-TESTNET.STELLAR.ORG",
+            &default_domains(),
+        )
+        .expect("case-insensitive match should succeed");
+    }
+
+    // ---- private IPv4 checks ----
+
+    #[test]
+    fn rejects_rfc1918_10_block() {
+        // 10.0.0.0/8 in allowlist so domain check passes; IP check must fire.
+        let err = validate_horizon_url(
+            "https://10.1.2.3",
+            &domains("10.1.2.3"),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("private/loopback"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_rfc1918_172_16_block() {
+        let err = validate_horizon_url(
+            "https://172.16.0.1",
+            &domains("172.16.0.1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_rfc1918_172_31_block() {
+        let err = validate_horizon_url(
+            "https://172.31.255.255",
+            &domains("172.31.255.255"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_rfc1918_192_168_block() {
+        let err = validate_horizon_url(
+            "https://192.168.1.1",
+            &domains("192.168.1.1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_loopback_127() {
+        let err = validate_horizon_url(
+            "https://127.0.0.1",
+            &domains("127.0.0.1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_link_local_169_254() {
+        let err = validate_horizon_url(
+            "https://169.254.1.1",
+            &domains("169.254.1.1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn accepts_public_ipv4_in_allowlist() {
+        // 1.1.1.1 is a public Cloudflare DNS IP — should pass if allowlisted
+        validate_horizon_url(
+            "https://1.1.1.1",
+            &domains("1.1.1.1"),
+        )
+        .expect("public IP in allowlist should be accepted");
+    }
+
+    // ---- private IPv6 checks ----
+
+    #[test]
+    fn rejects_ipv6_loopback() {
+        let err = validate_horizon_url(
+            "https://[::1]",
+            &domains("::1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_ipv6_unique_local_fc00() {
+        let err = validate_horizon_url(
+            "https://[fc00::1]",
+            &domains("fc00::1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_ipv6_unique_local_fd00() {
+        let err = validate_horizon_url(
+            "https://[fd00::1]",
+            &domains("fd00::1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    #[test]
+    fn rejects_ipv6_link_local() {
+        let err = validate_horizon_url(
+            "https://[fe80::1]",
+            &domains("fe80::1"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("private/loopback"));
+    }
+
+    // ---- malformed URL ----
+
+    #[test]
+    fn rejects_invalid_url() {
+        let err = validate_horizon_url("not a url at all", &default_domains()).unwrap_err();
+        assert!(err.to_string().contains("not a valid URL"));
     }
 }
