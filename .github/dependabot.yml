@@ -1,10 +1,18 @@
 version: 2
 updates:
+  # Workspace root (contracts, fuzz, shared crates).
+  # Security updates bypass grouping and are always opened immediately —
+  # this is native Dependabot behavior, not something configured here.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
     # Allow PRs to be opened automatically for patches and minor updates
 
   - package-ecosystem: "cargo"
@@ -19,6 +27,58 @@ updates:
       - "security"
     allow:
       - dependency-type: "all"
+
+  - package-ecosystem: "cargo"
+    directory: "/indexer"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "cargo"
+    directory: "/api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # Auto-update pinned GitHub Actions SHAs.
   # Dependabot will open grouped PRs to reduce noise when multiple actions

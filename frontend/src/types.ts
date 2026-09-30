@@ -41,6 +41,11 @@ export interface VoteRecord {
   type: 'For' | 'Against' | 'Abstain';
   weight: number;
   votedAt: string;
+  /**
+   * Optional off-chain comment reference (IPFS CID) the voter attached to
+   * explain their rationale. Not validated on-chain — see issue #103.
+   */
+  commentHash?: string | null;
 }
 
 export interface Proposal {

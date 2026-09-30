@@ -227,6 +227,21 @@ pub fn has_voted(env: &Env, proposal_id: u64, voter: &Address) -> bool {
         .unwrap_or(false)
 }
 
+/// Records that `proposal_id`'s voting period has been extended once via `extend_voting`.
+pub fn mark_extended(env: &Env, proposal_id: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::ProposalExtended(proposal_id), &true);
+}
+
+/// Returns `true` if `proposal_id`'s voting period has already been extended once.
+pub fn has_extended(env: &Env, proposal_id: u64) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ProposalExtended(proposal_id))
+        .unwrap_or(false)
+}
+
 /// Stores the vote record for `voter` on `proposal_id`.
 pub fn save_vote_record(env: &Env, proposal_id: u64, voter: &Address, record: &VoteRecord) {
     env.storage()
