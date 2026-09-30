@@ -15,6 +15,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Proposal, ProposalState } from '../types';
+import QuorumProgressBar from './QuorumProgressBar';
 
 const sortOptions = [
   { value: 'newest', label: 'Newest' },
@@ -124,6 +125,7 @@ export default function ProposalList({ proposals }: Props) {
               <th scope="col">End date</th>
               <th scope="col">Votes</th>
               <th scope="col">Weight</th>
+              <th scope="col">Quorum</th>
             </tr>
           </thead>
           <tbody>
@@ -140,11 +142,17 @@ export default function ProposalList({ proposals }: Props) {
                 <td>{proposal.endAt}</td>
                 <td>{proposal.votesCount}</td>
                 <td>{proposal.totalWeight}</td>
+                <td style={{ minWidth: '140px' }}>
+                  <QuorumProgressBar
+                    totalVotes={proposal.totalWeight}
+                    quorum={proposal.quorum}
+                  />
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7}>No proposals match your search and filter criteria.</td>
+                <td colSpan={8}>No proposals match your search and filter criteria.</td>
               </tr>
             )}
           </tbody>

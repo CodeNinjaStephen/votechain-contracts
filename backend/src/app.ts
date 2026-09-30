@@ -17,9 +17,11 @@ import cors from "cors";
 import helmet from "helmet";
 import { connectRedis } from "./middleware/redisCache";
 import { requestTracing } from "./middleware/requestTracing";
-import { metricsMiddleware, metricsHandler } from "./middleware/metrics";
+import { apiKeyAuth } from "./middleware/apiKeyAuth";
+import { rateLimit } from "./middleware/rateLimit";
 import healthRoutes from "./routes/health";
 import proposalRoutes from "./routes/proposals";
+import apiKeysRoutes from "./routes/apiKeys";
 import {
   notFoundHandler,
   globalErrorHandler,
@@ -83,7 +85,7 @@ const corsOptions: cors.CorsOptions = {
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
-  exposedHeaders: ["X-Request-Id", "X-Cache"],
+  exposedHeaders: ["X-Request-Id", "X-Cache", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "X-RateLimit-Tier"],
   credentials: true,
   // Tells browsers to cache the preflight response for 10 minutes
   maxAge: 600,
@@ -112,7 +114,20 @@ app.use(express.json());
 app.get("/metrics", metricsHandler);
 app.use("/", healthRoutes);
 
+// ── API key authentication & tiered rate limiting ──────────────────────────
+//
+// Order matters:
+//   1. apiKeyAuth   — resolves the Bearer token, sets req.apiKeyTier
+//   2. rateLimit    — uses req.apiKeyTier to select the correct window
+//
+// Both are async middleware applied to all /api routes.  Health routes are
+// intentionally excluded (mounted above, before this block).
+app.use("/api", apiKeyAuth);
+app.use("/api", rateLimit);
+
+// ── Routes ─────────────────────────────────────────────────────────────────
 app.use("/api", proposalRoutes);
+app.use("/api", apiKeysRoutes);
 
 // Catch unmatched routes — must come after all real route registrations.
 app.use(notFoundHandler);

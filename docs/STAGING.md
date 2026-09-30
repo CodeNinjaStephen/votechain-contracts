@@ -21,27 +21,12 @@ chmod +x ./scripts/deploy_staging.sh
 ./scripts/deploy_staging.sh
 ```
 
-The deploy script writes contract IDs to `.env.staging` and mirrors them into `config/staging.toml`.
+The deploy script writes contract IDs to `.env.staging`.
 
-3. Run the smoke test against the deployment:
+## Logging and Log Rotation
 
-```bash
-chmod +x ./scripts/smoke_test_staging.sh
-./scripts/smoke_test_staging.sh
-```
-
-The current staging deploy status is shown by the badge at the top of the
-[README](../README.md).
-
-## Known gaps
-
-- The smoke test's `initialize` calls assume the staging contracts are being
-  initialised for the first time on this deployment. Re-running the workflow
-  against contract IDs that are already initialised will fail on the
-  `initialize` step with `AlreadyInitialized` — redeploy fresh contract
-  instances (which `deploy_staging.sh` does on every run) before re-running.
-- The smoke test has not been exercised against a live testnet in this
-  change; the contract function names and argument shapes were taken
-  directly from `contracts/governance/src/lib.rs` and `contracts/token/src/lib.rs`,
-  but CLI argument encoding for the `Vote` enum in particular is worth a
-  manual dry run before relying on it as a release gate.
+Staging containers use the same `json-file` rotation as local development
+(`docker-compose.yml`, 100MB × 5 files per service). In addition, the staging deployment ships
+logs to the same centralised backend (Loki or CloudWatch Logs) used for production, but with a
+shorter **7-day retention** window. See [logging.md](logging.md) for driver configuration and
+retention setup.

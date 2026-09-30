@@ -7,6 +7,7 @@ Thank you for contributing! VoteChain is an open-source governance protocol buil
 ## Table of Contents
 
 - [Getting Started](#getting-started)
+  - [Video Walkthrough](#video-walkthrough)
 - [Issue Triage Process](#issue-triage-process)
 - [Branch Protection Rules](#branch-protection-rules)
 - [Branching Strategy](#branching-strategy)
@@ -36,6 +37,24 @@ For a fully reproducible environment without a local Rust installation, use Dock
 ```bash
 docker compose run --rm dev make test
 ```
+
+### Video Walkthrough
+
+New to VoteChain?  Watch the **[Video Walkthrough for First-Time Contributors](docs/video-walkthrough.md)** — a ~10-minute screen-recording that covers the complete workflow end-to-end:
+
+- Cloning the repository
+- Installing Rust, the WebAssembly target, and the Stellar CLI
+- Running the full test suite with `make test`
+- Making a small change and verifying nothing broke
+- Committing with Conventional Commits and opening a pull request
+
+A full written transcript is included in the doc for accessibility.
+
+> **Video status:** 🎬 Pending recording — the placeholder and transcript are
+> already in place; the video link will be updated once it is recorded and
+> uploaded.
+
+---
 
 ### Setting up pre-commit hooks
 

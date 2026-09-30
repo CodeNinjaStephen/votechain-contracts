@@ -27,3 +27,22 @@ exceptions = []
 
 [licenses.private]
 ignore = true
+
+# ---------------------------------------------------------------------------
+# Crate bans (issue #100 — SQL injection audit)
+# ---------------------------------------------------------------------------
+# CI runs `cargo deny check` (via the audit.yml workflow's cargo-audit step,
+# and locally via `cargo deny check`) to catch licence violations and crate
+# policy violations.
+#
+# sqlx is the approved SQL access layer for the VoteChain indexer. All queries
+# must use parameterised placeholders — see docs/security/SEC-013-sql-injection-audit.md.
+#
+# If a known-vulnerable version of sqlx is ever published to the RustSec
+# advisory database (https://rustsec.org/), cargo-audit (already in CI) will
+# flag it automatically. Add an explicit `deny` entry here if a specific
+# version must be blocked before an advisory is published.
+[bans]
+# List crate versions that must never appear in the dependency graph.
+# Format:  { name = "crate-name", version = "=x.y.z", reason = "CVE-XXXX" }
+denied = []

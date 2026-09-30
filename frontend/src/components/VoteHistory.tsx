@@ -16,6 +16,7 @@ import { useMemo, useState } from 'react';
 import type { Proposal, ProposalState, VoteRecord } from '../types';
 import { generateCsv } from '../utils/csv';
 import { isValidStellarAddress, isStellarAddressEmpty } from '../utils/stellarAddress';
+import { hasComment, ipfsGatewayUrl } from '../utils/ipfs';
 
 interface Props {
   proposals: Proposal[];
@@ -78,7 +79,7 @@ export default function VoteHistory({ proposals }: Props) {
     if (addressEmpty) {
       return (
         <tr>
-          <td colSpan={5}>Enter a Stellar address above to view vote history.</td>
+          <td colSpan={6}>Enter a Stellar address above to view vote history.</td>
         </tr>
       );
     }
@@ -90,7 +91,7 @@ export default function VoteHistory({ proposals }: Props) {
       return (
         <tr>
           {/* Distinct "no votes found" message — not the same as invalid-address case (#17) */}
-          <td colSpan={5}>No votes found for this address in the selected range.</td>
+          <td colSpan={6}>No votes found for this address in the selected range.</td>
         </tr>
       );
     }
@@ -103,6 +104,21 @@ export default function VoteHistory({ proposals }: Props) {
           <span className={statusClass(proposal.state)}>{proposal.state}</span>
         </td>
         <td>{vote.votedAt}</td>
+        <td>
+          {/* issue #103: render a link to the off-chain comment when a CID was attached. */}
+          {hasComment(vote.commentHash) ? (
+            <a
+              href={ipfsGatewayUrl(vote.commentHash)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`View voter's comment for ${proposal.title}`}
+            >
+              View comment
+            </a>
+          ) : (
+            <span aria-hidden="true">—</span>
+          )}
+        </td>
       </tr>
     ));
   }
@@ -190,6 +206,7 @@ export default function VoteHistory({ proposals }: Props) {
                 <th scope="col">Weight</th>
                 <th scope="col">State</th>
                 <th scope="col">Voted At</th>
+                <th scope="col">Comment</th>
               </tr>
             </thead>
             <tbody>{renderTableBody()}</tbody>

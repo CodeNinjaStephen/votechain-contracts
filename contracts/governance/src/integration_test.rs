@@ -40,7 +40,7 @@ fn test_real_token_and_governance_deployed_in_same_env() {
     let voter = Address::generate(&t.env);
     tok.mint(&t.admin, &voter, &750);
     let pid = create_test_proposal(&t, &t.admin);
-    t.client.cast_vote(&voter, &pid, &Vote::Yes);
+    t.client.cast_vote(&voter, &pid, &Vote::Yes, &None);
 
     assert!(t.client.has_voted(&pid, &voter));
 }
@@ -57,8 +57,8 @@ fn test_governance_reads_balance_from_real_token() {
     tok.mint(&t.admin, &alice, &1_234);
     tok.mint(&t.admin, &bob, &5_678);
 
-    t.client.cast_vote(&alice, &pid, &Vote::Yes);
-    t.client.cast_vote(&bob, &pid, &Vote::No);
+    t.client.cast_vote(&alice, &pid, &Vote::Yes, &None);
+    t.client.cast_vote(&bob, &pid, &Vote::No, &None);
 
     assert_eq!(t.client.get_vote(&pid, &alice).unwrap().weight, tok.balance(&alice));
     assert_eq!(t.client.get_vote(&pid, &bob).unwrap().weight, tok.balance(&bob));
@@ -80,7 +80,7 @@ fn test_balance_change_after_vote_does_not_change_recorded_weight() {
     let voter = Address::generate(&t.env);
     let other = Address::generate(&t.env);
     tok.mint(&t.admin, &voter, &1_000);
-    t.client.cast_vote(&voter, &pid, &Vote::Yes);
+    t.client.cast_vote(&voter, &pid, &Vote::Yes, &None);
 
     // Drain the voter's balance through the real token contract.
     tok.transfer(&voter, &other, &1_000);
@@ -104,7 +104,7 @@ fn test_zero_real_token_balance_prevents_voting() {
     let voter = Address::generate(&t.env);
 
     assert_eq!(token(&t).balance(&voter), 0);
-    let res = t.client.try_cast_vote(&voter, &pid, &Vote::Yes);
+    let res = t.client.try_cast_vote(&voter, &pid, &Vote::Yes, &None);
     assert_eq!(res, Err(Ok(ContractError::NoVotingPower)));
     assert!(!t.client.has_voted(&pid, &voter));
 }
@@ -121,7 +121,7 @@ fn test_balance_transferred_away_before_vote_prevents_voting() {
     tok.mint(&t.admin, &voter, &500);
     tok.transfer(&voter, &sink, &500);
 
-    let res = t.client.try_cast_vote(&voter, &pid, &Vote::No);
+    let res = t.client.try_cast_vote(&voter, &pid, &Vote::No, &None);
     assert_eq!(res, Err(Ok(ContractError::NoVotingPower)));
     assert_eq!(t.client.get_proposal(&pid).votes_no, 0);
 }

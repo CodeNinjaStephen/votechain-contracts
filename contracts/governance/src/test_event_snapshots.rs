@@ -138,7 +138,7 @@ fn test_event_snapshot_vote_cast() {
         .transfer(&admin, &voter, &500_000);
     let c = snap_gov(&env, &admin, &token);
     let pid = snap_proposal(&env, &c, &voter);
-    c.cast_vote(&voter, &pid, &Vote::Yes);
+    c.cast_vote(&voter, &pid, &Vote::Yes, &None);
 
     let events = env.events().all();
     assert!(
@@ -162,7 +162,7 @@ fn test_event_snapshot_proposal_finalised() {
         .transfer(&admin, &voter, &500_000);
     let c = snap_gov(&env, &admin, &token);
     let pid = snap_proposal(&env, &c, &voter);
-    c.cast_vote(&voter, &pid, &Vote::Yes);
+    c.cast_vote(&voter, &pid, &Vote::Yes, &None);
     env.ledger().with_mut(|l| l.timestamp += 3601);
     c.finalise(&pid);
 
@@ -187,7 +187,7 @@ fn test_event_snapshot_proposal_executed() {
         .transfer(&admin, &voter, &500_000);
     let c = snap_gov(&env, &admin, &token);
     let pid = snap_proposal(&env, &c, &voter);
-    c.cast_vote(&voter, &pid, &Vote::Yes);
+    c.cast_vote(&voter, &pid, &Vote::Yes, &None);
     env.ledger().with_mut(|l| l.timestamp += 3601);
     c.finalise(&pid);
     c.execute(&admin, &pid);
