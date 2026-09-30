@@ -31,6 +31,21 @@ const router = Router();
 const VALID_STATES = new Set(["active", "passed", "rejected", "executed", "cancelled"]);
 
 /**
+ * Predefined tag taxonomy for proposal categorisation (issue #102).
+ * Must stay in sync with docs/tags-taxonomy.md.
+ */
+const PREDEFINED_TAGS = new Set([
+  "treasury",
+  "technical",
+  "community",
+  "security",
+  "emergency",
+  "meta",
+  "protocol",
+  "grants",
+]);
+
+/**
  * Sanitises a full-text search query for use in a PostgreSQL `websearch_to_tsquery` call.
  *
  * Security: this function normalises the query string so that it cannot inject raw
@@ -73,6 +88,7 @@ function buildSearchQuery(
   q: string | undefined,
   limit: number,
   offset: number,
+  tag: string | undefined,
 ): { sql: string; params: unknown[] } {
   const params: unknown[] = [];
   const conditions: string[] = [];
@@ -91,6 +107,15 @@ function buildSearchQuery(
     orderBy = `ts_rank(search_vector, websearch_to_tsquery('english', $${p})) DESC, id DESC`;
   }
 
+  // Issue #102: tag-based filtering.
+  // The `proposal_tags` column stores tags as a lowercase text array.
+  // We use the standard PostgreSQL `= ANY(...)` operator with a parameterised
+  // value so no interpolation of user-supplied data occurs.
+  if (tag) {
+    params.push(tag.toLowerCase());
+    conditions.push(`$${params.length} = ANY(proposal_tags)`);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(limit, offset);
 
@@ -107,7 +132,8 @@ function buildSearchQuery(
       quorum,
       start_time,
       end_time,
-      execute_after
+      execute_after,
+      proposal_tags
     FROM proposals
     ${where}
     ORDER BY ${orderBy}
@@ -120,7 +146,8 @@ function buildSearchQuery(
 
 // GET /proposals — cached 30 s
 // Supports ?q= for full-text search, ?state= for state filtering,
-// ?page= and ?limit= for pagination, ?after= for cursor-based pagination.
+// ?tag= for tag filtering (issue #102), ?page= and ?limit= for pagination,
+// ?after= for cursor-based pagination.
 router.get("/proposals", cacheProposalList, async (req: Request, res: Response) => {
   // TODO: fetch from Stellar RPC / indexer (stub returns empty array)
   const proposals: unknown[] = [];
@@ -139,11 +166,24 @@ router.get("/proposals", cacheProposalList, async (req: Request, res: Response) 
   const rawQ = typeof req.query.q === "string" ? req.query.q : undefined;
   const q = rawQ !== undefined ? sanitiseSearchQuery(rawQ) : undefined;
 
+  // Issue #102: tag-based filtering.
+  // Only predefined taxonomy tags are accepted; unknown tags return a 400 so
+  // callers receive early feedback rather than a silently empty result set.
+  const tag = typeof req.query.tag === "string" ? req.query.tag : undefined;
+  if (tag !== undefined) {
+    const normalisedTag = tag.toLowerCase();
+    if (!PREDEFINED_TAGS.has(normalisedTag)) {
+      return res.status(400).json({
+        error: `Invalid tag. Allowed tags: ${[...PREDEFINED_TAGS].join(", ")}`,
+      });
+    }
+  }
+
   const after = typeof req.query.after === "string" ? req.query.after : undefined;
   const offset = (page - 1) * limit;
 
   // Build the search query (for use with a real DB connection).
-  const { sql, params } = buildSearchQuery(state, q || undefined, limit, offset);
+  const { sql, params } = buildSearchQuery(state, q || undefined, limit, offset, tag?.toLowerCase());
   // TODO: execute `sql` with `params` against the indexer PostgreSQL database
   // e.g.: const rows = await db.query(sql, params);
   void sql;
@@ -154,6 +194,7 @@ router.get("/proposals", cacheProposalList, async (req: Request, res: Response) 
     title?: string;
     description?: string;
     state?: string;
+    proposal_tags?: string[];
   }>;
 
   if (state) {
@@ -169,6 +210,12 @@ router.get("/proposals", cacheProposalList, async (req: Request, res: Response) 
     );
   }
 
+  // Issue #102: filter by tag in the in-memory stub path.
+  if (tag) {
+    const normalisedTag = tag.toLowerCase();
+    filtered = filtered.filter((p) => p.proposal_tags?.includes(normalisedTag));
+  }
+
   const data = filtered.slice(offset, offset + limit);
   res.json({
     data,
@@ -180,6 +227,7 @@ router.get("/proposals", cacheProposalList, async (req: Request, res: Response) 
       ...(after ? { after } : {}),
       ...(state ? { state } : {}),
       ...(q ? { q } : {}),
+      ...(tag ? { tag: tag.toLowerCase() } : {}),
     },
   });
 });
