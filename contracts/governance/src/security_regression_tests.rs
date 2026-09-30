@@ -77,7 +77,7 @@ mod reentrant {
             let gov: Option<Address> = env.storage().instance().get(&ReentrantKey::Gov);
             let pid: Option<u64> = env.storage().instance().get(&ReentrantKey::Proposal);
             if let (Some(gov), Some(pid)) = (gov, pid) {
-                GovernanceContractClient::new(env, &gov).cast_vote(voter, &pid, &Vote::Yes);
+                GovernanceContractClient::new(env, &gov).cast_vote(voter, &pid, &Vote::Yes, &None);
             }
         }
     }
@@ -99,7 +99,7 @@ fn sec_008_balance_read_from_configured_token_not_spoof() {
     assert_eq!(spoof.balance(&voter), 1_000_000_000);
 
     let pid = create_test_proposal(&t, &t.admin);
-    t.client.cast_vote(&voter, &pid, &Vote::Yes);
+    t.client.cast_vote(&voter, &pid, &Vote::Yes, &None);
 
     assert_eq!(t.client.get_vote(&pid, &voter).unwrap().weight, 42);
     assert_eq!(t.client.get_proposal(&pid).votes_yes, 42);
@@ -114,7 +114,7 @@ fn sec_008_spoofed_balance_does_not_grant_voting_power() {
     let voter = Address::generate(&t.env);
     let pid = create_test_proposal(&t, &t.admin);
 
-    let res = t.client.try_cast_vote(&voter, &pid, &Vote::Yes);
+    let res = t.client.try_cast_vote(&voter, &pid, &Vote::Yes, &None);
     assert_eq!(res, Err(Ok(ContractError::NoVotingPower)));
 }
 
@@ -132,7 +132,7 @@ fn sec_008_cannot_swap_voting_token_to_spoof() {
     let voter = Address::generate(&t.env);
     let pid = create_test_proposal(&t, &t.admin);
     assert_eq!(
-        t.client.try_cast_vote(&voter, &pid, &Vote::Yes),
+        t.client.try_cast_vote(&voter, &pid, &Vote::Yes, &None),
         Err(Ok(ContractError::NoVotingPower))
     );
 }
@@ -156,7 +156,7 @@ fn sec_009_try_reinit(caller_is_admin: bool) {
     let voter = Address::generate(&t.env);
     TokenContractClient::new(&t.env, &t.token_id).mint(&t.admin, &voter, &7);
     let pid = create_test_proposal(&t, &t.admin);
-    t.client.cast_vote(&voter, &pid, &Vote::Yes);
+    t.client.cast_vote(&voter, &pid, &Vote::Yes, &None);
     assert_eq!(t.client.get_vote(&pid, &voter).unwrap().weight, 7);
 }
 
@@ -222,7 +222,7 @@ fn sec_010_reentrant_cast_vote_from_token_hook_reverts() {
     let (env, gov, _tok, pid) = sec_010_setup();
     let voter = Address::generate(&env);
 
-    assert!(gov.try_cast_vote(&voter, &pid, &Vote::Yes).is_err());
+    assert!(gov.try_cast_vote(&voter, &pid, &Vote::Yes, &None).is_err());
 
     assert!(!gov.has_voted(&pid, &voter));
     let p = gov.get_proposal(&pid);
