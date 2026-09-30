@@ -1,9 +1,15 @@
 # Staging environment
 
-This repository includes a dedicated `staging` environment for integration testing before mainnet.
+This repository includes a dedicated `staging` environment for integration testing before mainnet. (#67)
 
 - Config: [config/staging.toml](config/staging.toml#L1)
-- Deploy script: `scripts/deploy_staging.sh` — wrapper that calls `scripts/deploy.sh` with `NETWORK=staging`.
+- Deploy script: `scripts/deploy_staging.sh` — wrapper that calls `scripts/deploy.sh` with `NETWORK=staging`, then
+  writes the resulting contract IDs into both `.env.staging` and `config/staging.toml`.
+- Smoke test script: `scripts/smoke_test_staging.sh` — exercises the full proposal lifecycle
+  (initialise → create proposal → cast vote → finalise) against the freshly deployed contracts,
+  using a fresh keypair funded from the Stellar testnet friendbot.
+- CI workflow: [`.github/workflows/deploy-staging.yml`](../.github/workflows/deploy-staging.yml) —
+  runs the deploy script and the smoke test automatically on every merge to `develop`.
 
 Usage:
 

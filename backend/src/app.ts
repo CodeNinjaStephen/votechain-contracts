@@ -105,10 +105,13 @@ app.options("*", cors(corsOptions));
 app.use(cors(corsOptions));
 
 app.use(requestTracing);
+app.use(metricsMiddleware);
 app.use(express.json());
 
-// Health and readiness probes — mounted BEFORE rate-limiting and auth so
-// load balancers and orchestrators can always reach them without credentials.
+// Health, readiness and metrics — mounted BEFORE rate-limiting and auth so
+// load balancers, orchestrators and Prometheus can always reach them without
+// credentials.
+app.get("/metrics", metricsHandler);
 app.use("/", healthRoutes);
 
 // ── API key authentication & tiered rate limiting ──────────────────────────
