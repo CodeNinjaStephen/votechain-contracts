@@ -17,8 +17,11 @@ import cors from "cors";
 import helmet from "helmet";
 import { connectRedis } from "./middleware/redisCache";
 import { requestTracing } from "./middleware/requestTracing";
+import { apiKeyAuth } from "./middleware/apiKeyAuth";
+import { abuseDetection } from "./middleware/abuseDetection";
 import healthRoutes from "./routes/health";
 import proposalRoutes from "./routes/proposals";
+import keyRoutes from "./routes/keys";
 import {
   notFoundHandler,
   globalErrorHandler,
@@ -82,7 +85,14 @@ const corsOptions: cors.CorsOptions = {
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
-  exposedHeaders: ["X-Request-Id", "X-Cache"],
+  exposedHeaders: [
+    "X-Request-Id",
+    "X-Cache",
+    "X-RateLimit-Limit",
+    "X-RateLimit-Remaining",
+    "X-RateLimit-Reset",
+    "X-RateLimit-Tier",
+  ],
   credentials: true,
   // Tells browsers to cache the preflight response for 10 minutes
   maxAge: 600,
@@ -108,7 +118,13 @@ app.use(express.json());
 // load balancers and orchestrators can always reach them without credentials.
 app.use("/", healthRoutes);
 
-app.use("/api", proposalRoutes);
+// API key auth resolves the caller's tier and enforces per-tier rate limits.
+// Abuse detection runs after auth so req.apiKeyId is populated.
+// Both apply to all /api routes.
+app.use("/api", apiKeyAuth, abuseDetection, proposalRoutes);
+
+// Key management endpoints — admin JWT auth is enforced inside the router.
+app.use("/api/keys", keyRoutes);
 
 // Catch unmatched routes — must come after all real route registrations.
 app.use(notFoundHandler);
