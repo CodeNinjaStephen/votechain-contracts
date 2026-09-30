@@ -15,6 +15,9 @@
 import React from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useParams } from "react-router-dom";
+import QuorumProgressBar from "../components/QuorumProgressBar";
+import { useProposals } from "../context/ProposalContext";
 
 export default function ProposalDetail() {
   const { t } = useTranslation();
@@ -28,3 +31,4 @@ export default function ProposalDetail() {
     </>
   );
 }
+
