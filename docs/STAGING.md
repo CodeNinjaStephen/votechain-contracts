@@ -16,3 +16,11 @@ chmod +x ./scripts/deploy_staging.sh
 ```
 
 The deploy script writes contract IDs to `.env.staging`.
+
+## Logging and Log Rotation
+
+Staging containers use the same `json-file` rotation as local development
+(`docker-compose.yml`, 100MB × 5 files per service). In addition, the staging deployment ships
+logs to the same centralised backend (Loki or CloudWatch Logs) used for production, but with a
+shorter **7-day retention** window. See [logging.md](logging.md) for driver configuration and
+retention setup.

@@ -1420,6 +1420,15 @@ Regression tests with JSON snapshots in `test_snapshots/`:
 cargo test -- --nocapture --test-threads=1
 ```
 
+### WASM Binary Size Tracking
+
+CI records the compiled `governance.wasm` and `token.wasm` sizes on every push to `main`
+(`.github/workflows/ci.yml`, `wasm-size-record` job) into
+[`docs/wasm-size-history.json`](docs/wasm-size-history.json), and renders a size-over-time chart
+and table in [`docs/wasm-size-history.md`](docs/wasm-size-history.md). Every pull request gets a
+sticky comment showing the current vs. base branch sizes and the delta, with a warning if either
+contract grows more than 5% in a single PR.
+
 ---
 
 ## Security
