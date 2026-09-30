@@ -13,9 +13,22 @@
 // limitations under the License.
 
 import React from "react";
+import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useParams } from "react-router-dom";
+import QuorumProgressBar from "../components/QuorumProgressBar";
+import { useProposals } from "../context/ProposalContext";
 
 export default function ProposalDetail() {
   const { t } = useTranslation();
-  return <div>{t("proposal.title")}</div>;
+  const { id } = useParams<{ id: string }>();
+  return (
+    <>
+      <div>{t("proposal.title")}</div>
+      <a href={`/api/proposals/${id}/votes.csv`} download>
+        Export Votes as CSV
+      </a>
+    </>
+  );
 }
+

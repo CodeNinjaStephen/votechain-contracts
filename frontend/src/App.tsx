@@ -36,6 +36,7 @@ const VoteHistory      = React.lazy(() => import('./pages/VoteHistory'));
 const GovernanceDashboard = React.lazy(() =>
   import('./pages/GovernanceDashboard').then((m) => ({ default: m.GovernanceDashboard ?? m.default }))
 );
+const Simulate = React.lazy(() => import('./pages/Simulate'));
 
 /** Updates the document title on route change (issue #16 — browser history / a11y). */
 function PageTitle({ title }: { title: string }) {
@@ -98,6 +99,16 @@ function AppRoutes() {
                 <ErrorBoundary section="GovernanceDashboard">
                   <PageTitle title="Dashboard" />
                   <GovernanceDashboard />
+                </ErrorBoundary>
+              }
+            />
+            {/* Issue #111 — Proposal simulation / quorum explorer */}
+            <Route
+              path="/simulate"
+              element={
+                <ErrorBoundary section="Simulate">
+                  <PageTitle title="Simulate" />
+                  <Simulate />
                 </ErrorBoundary>
               }
             />
